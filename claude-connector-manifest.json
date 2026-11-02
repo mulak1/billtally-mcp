@@ -1,0 +1,81 @@
+{
+  "schema_version": "1.0",
+  "name": "BillTally",
+  "slug": "billtally",
+  "tagline": "Plain-English Bill & Invoice Math Checker, Bank Statement Matcher & Spreadsheet Exporter",
+  "description": "Helps bookkeepers, accountants, and small business owners turn messy bills, receipts, and bank statements into clean spreadsheets. Automatically checks every line item (Quantity x Unit Price) and tax total to the penny, matches bills against bank withdrawals to spot duplicate charges, and exports ready-to-use multi-tab .xlsx workbooks with live =SUM() formulas or accounting CSV files.",
+  "category": "Finance & Accounting",
+  "publisher": {
+    "name": "BillTally",
+    "founder": "Kader Mula",
+    "website": "http://localhost:8791",
+    "about_url": "http://localhost:8791/about",
+    "documentation_url": "http://localhost:8791/docs",
+    "support_email": "mulak1@gmail.com",
+    "privacy_policy_url": "http://localhost:8791/privacy",
+    "terms_of_service_url": "http://localhost:8791/terms"
+  },
+  "mcp_endpoint": {
+    "transport": "streamable-http",
+    "url": "http://localhost:8791/mcp",
+    "protocol_version": "2025-03-26"
+  },
+  "authentication": {
+    "type": "oauth2.1_pkce",
+    "metadata_url": "http://localhost:8791/.well-known/oauth-authorization-server",
+    "registration_url": "http://localhost:8791/oauth/register",
+    "authorization_url": "http://localhost:8791/oauth/authorize",
+    "token_url": "http://localhost:8791/oauth/token",
+    "code_challenge_method": "S256",
+    "scopes": ["mcp:tools", "mcp:export"]
+  },
+  "sample_prompts": [
+    "Check this supplier bill to make sure every line item and sales tax adds up to the penny.",
+    "Compare our October supplier bills against our business checking statement and flag any duplicate charges.",
+    "Export these checked bills into a 3-tab Excel workbook with live =SUM() formulas."
+  ],
+  "tools": [
+    {
+      "name": "extract_financial_documents",
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "reconcile_invoices_with_bank_ledger",
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "export_ledger_bundle",
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    }
+  ],
+  "pricing_tiers": {
+    "free": {
+      "monthly_documents": 15,
+      "price_usd": 0
+    },
+    "pro": {
+      "monthly_documents": 5000,
+      "price_usd": 29
+    }
+  },
+  "privacy_and_data_handling": {
+    "trains_on_customer_data": false,
+    "deterministic_math_engine": true,
+    "retention_policy": "Bills and statements are checked in memory and never used to train models."
+  }
+}

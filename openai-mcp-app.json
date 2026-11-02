@@ -1,0 +1,74 @@
+{
+  "schema_version": "2026-03",
+  "app_id": "billtally",
+  "display_name": "BillTally: Bill Math Checker & Bank Statement Matcher",
+  "short_description": "Check supplier bills for math errors, match invoices against bank statements, and export clean spreadsheets with live =SUM() formulas.",
+  "categories": ["finance", "accounting", "productivity", "data_extraction"],
+  "legal_info": {
+    "privacy_policy_url": "http://localhost:8791/privacy",
+    "terms_of_service_url": "http://localhost:8791/terms"
+  },
+  "conversation_starters": [
+    "Check this plumbing repair bill for any line-item math overcharges.",
+    "Match our monthly supplier bills against our checking statement withdrawals.",
+    "Create an Excel spreadsheet (.xlsx) of our checked bills using corrected math totals."
+  ],
+  "mcp_endpoints": {
+    "streamable_http": "http://localhost:8791/mcp",
+    "healthcheck": "http://localhost:8791/health"
+  },
+  "oauth": {
+    "version": "2.1",
+    "pkce_required": true,
+    "code_challenge_methods_supported": ["S256"],
+    "discovery_url": "http://localhost:8791/.well-known/oauth-authorization-server",
+    "registration_endpoint": "http://localhost:8791/oauth/register",
+    "authorization_endpoint": "http://localhost:8791/oauth/authorize",
+    "token_endpoint": "http://localhost:8791/oauth/token"
+  },
+  "capabilities": {
+    "tools": [
+      {
+        "name": "extract_financial_documents",
+        "read_only": true,
+        "destructive": false,
+        "idempotent": true,
+        "open_world": false
+      },
+      {
+        "name": "reconcile_invoices_with_bank_ledger",
+        "read_only": true,
+        "destructive": false,
+        "idempotent": true,
+        "open_world": false
+      },
+      {
+        "name": "export_ledger_bundle",
+        "read_only": true,
+        "destructive": false,
+        "idempotent": true,
+        "open_world": false
+      }
+    ]
+  },
+  "verification_test_cases": [
+    {
+      "name": "Wholesale Bakery & Kitchen Supply Bill (Balanced)",
+      "preset_id": "messy_saas_invoice",
+      "expected_math_verified": true,
+      "expected_delta": 0.0
+    },
+    {
+      "name": "Plumbing & Water Heater Repair Bill (+$200 Overcharge)",
+      "preset_id": "discrepant_contractor_invoice",
+      "expected_math_verified": false,
+      "expected_delta": 200.0
+    },
+    {
+      "name": "October Business Checking Statement vs. Supplier Bills",
+      "preset_id": "bank_reconciliation_batch",
+      "expected_matched": 3,
+      "expected_duplicates": 1
+    }
+  ]
+}

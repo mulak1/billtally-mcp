@@ -1,0 +1,22 @@
+{
+  "name": "billtally-invoice-receipt-extractor",
+  "version": "1.0.0",
+  "description": "Plain-English supplier bill & receipt math checker, bank statement matcher, and multi-tab Excel (.xlsx) / accounting CSV spreadsheet exporter.",
+  "author": {
+    "name": "BillTally (Kader Mula)",
+    "url": "https://schemaextract-mcp-production.up.railway.app"
+  },
+  "homepage": "https://schemaextract-mcp-production.up.railway.app",
+  "license": "MIT",
+  "keywords": [
+    "invoice-extraction",
+    "receipt-scanner",
+    "bookkeeping",
+    "accounting",
+    "bank-reconciliation",
+    "excel",
+    "xlsx",
+    "csv",
+    "financial-audit"
+  ]
+}

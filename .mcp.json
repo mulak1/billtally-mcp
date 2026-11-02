@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "billtally": {
+      "type": "http",
+      "url": "https://schemaextract-mcp-production.up.railway.app/mcp"
+    }
+  }
+}

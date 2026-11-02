@@ -1,0 +1,313 @@
+"""
+SchemaExtract MCP — FastAPI Server Entrypoint (Port 8791).
+Exposes:
+- Streamable HTTP MCP Endpoint (`POST /mcp` & `GET /mcp`)
+- OAuth 2.1 with S256 PKCE (`/.well-known/oauth-authorization-server`, `/oauth/register`, `/oauth/authorize`, `/oauth/token`)
+- REST API equivalents (`/api/extract`, `/api/reconcile`, `/api/export`, `/api/presets`, `/api/quota`)
+- Download endpoint (`/downloads/{filename}`)
+- Claude & ChatGPT Store Manifests (`/manifests/claude`, `/manifests/openai`, `/privacy`, `/terms`)
+- Interactive Web Studio (`GET /`)
+"""
+
+import json
+import os
+from pathlib import Path
+from typing import Any, Dict, Optional
+from urllib.parse import parse_qs
+
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+import uvicorn
+
+from app.exporter import DEFAULT_EXPORT_DIR, export_ledger_bundle, sanitize_export_filename
+from app.extractor import extract_financial_document
+from app.mcp_server import MCP_PROTOCOL_VERSION, MCP_TOOLS_CATALOG, handle_mcp_jsonrpc
+from app.models import (
+    ExportBundleRequest,
+    ExtractDocumentRequest,
+    ReconcileLedgerRequest,
+)
+from app.oauth_quota import OAuth21Server, QuotaManager
+from app.presets import get_all_presets
+from app.reconciler import reconcile_invoices_with_bank_ledger
+from app.studio_pages import (
+    render_about_html,
+    render_docs_html,
+    render_privacy_html,
+    render_terms_html,
+)
+from app.studio_ui import render_studio_html
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+app = FastAPI(
+    title="BillTally",
+    description="Plain-English Bill & Invoice Math Checker, Bank Statement Matcher & Spreadsheet Exporter",
+    version="1.0.0",
+    docs_url="/openapi-docs",
+)
+
+oauth_server = OAuth21Server(base_url="http://localhost:8791")
+quota_manager = QuotaManager()
+
+
+@app.get("/", response_class=HTMLResponse)
+def studio_home() -> HTMLResponse:
+    """Serve the Interactive Financial Accounting Web Studio & Store Listing Preview."""
+    return HTMLResponse(content=render_studio_html())
+
+
+@app.get("/about", response_class=HTMLResponse)
+def about_page() -> HTMLResponse:
+    """Serve the public About & Company Information HTML page."""
+    return HTMLResponse(content=render_about_html())
+
+
+@app.get("/docs", response_class=HTMLResponse)
+@app.get("/documentation", response_class=HTMLResponse)
+def public_docs_page() -> HTMLResponse:
+    """Serve the public User & IT Administrator Documentation HTML page."""
+    return HTMLResponse(content=render_docs_html())
+
+
+@app.get("/health")
+def health_check() -> Dict[str, Any]:
+    """Health check endpoint for Claude & ChatGPT MCP directory probes."""
+    return {
+        "status": "ok",
+        "service": "billtally-mcp",
+        "port": 8791,
+        "protocolVersion": MCP_PROTOCOL_VERSION,
+        "tools_count": len(MCP_TOOLS_CATALOG),
+    }
+
+
+@app.get("/privacy", response_class=HTMLResponse)
+def privacy_policy() -> HTMLResponse:
+    """Plain-English Privacy & Confidentiality Policy HTML page required by Claude and ChatGPT directories."""
+    return HTMLResponse(content=render_privacy_html())
+
+
+@app.get("/terms", response_class=HTMLResponse)
+def terms_of_service() -> HTMLResponse:
+    """Plain-English Terms of Service & Disclaimer HTML page required by Claude and ChatGPT directories."""
+    return HTMLResponse(content=render_terms_html())
+
+
+# ==============================================================================
+# STREAMABLE HTTP MCP ENDPOINTS (`GET /mcp` & `POST /mcp`)
+# ==============================================================================
+
+@app.get("/mcp")
+def mcp_discovery() -> Dict[str, Any]:
+    """Streamable HTTP MCP server discovery & capability probe."""
+    return {
+        "name": "billtally-mcp",
+        "version": "1.0.0",
+        "protocolVersion": MCP_PROTOCOL_VERSION,
+        "transport": "streamable-http",
+        "endpoint": "/mcp",
+        "oauth_discovery": "/.well-known/oauth-authorization-server",
+        "tools": [t["name"] for t in MCP_TOOLS_CATALOG],
+    }
+
+
+@app.post("/mcp")
+async def mcp_jsonrpc_endpoint(request: Request) -> JSONResponse:
+    """Handle JSON-RPC 2.0 requests and notifications over Streamable HTTP."""
+    try:
+        payload = await request.json()
+    except Exception:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "jsonrpc": "2.0",
+                "id": None,
+                "error": {"code": -32700, "message": "Parse error: invalid JSON payload."},
+            },
+        )
+
+    if isinstance(payload, list):
+        responses = []
+        for item in payload:
+            resp, _ = handle_mcp_jsonrpc(item, quota_manager=quota_manager)
+            if resp is not None:
+                responses.append(resp)
+        return JSONResponse(status_code=200, content=responses)
+
+    resp_dict, status_code = handle_mcp_jsonrpc(payload, quota_manager=quota_manager)
+    return JSONResponse(status_code=status_code, content=resp_dict)
+
+
+# ==============================================================================
+# OAUTH 2.1 WITH S256 PKCE & DYNAMIC CLIENT REGISTRATION ENDPOINTS
+# ==============================================================================
+
+@app.get("/.well-known/oauth-authorization-server")
+def oauth_metadata(request: Request) -> Dict[str, Any]:
+    """RFC 8414 OAuth 2.1 Authorization Server Metadata with S256 PKCE support."""
+    base = _resolve_public_origin(request)
+    return oauth_server.metadata(base_url=base)
+
+
+@app.post("/oauth/register")
+async def oauth_register(request: Request) -> JSONResponse:
+    """RFC 7591 Dynamic Client Registration Endpoint for Claude & ChatGPT connectors."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    registered = oauth_server.register_client(
+        client_name=str(body.get("client_name", "MCP Assistant Client")),
+        redirect_uris=body.get("redirect_uris"),
+    )
+    return JSONResponse(status_code=201, content=registered)
+
+
+@app.get("/oauth/authorize")
+def oauth_authorize(
+    response_type: str = Query(...),
+    client_id: str = Query(...),
+    redirect_uri: str = Query(...),
+    code_challenge: str = Query(...),
+    code_challenge_method: str = Query("S256"),
+    state: Optional[str] = Query(None),
+    scope: str = Query("mcp:tools mcp:export"),
+) -> JSONResponse:
+    """OAuth 2.1 Authorization Endpoint enforcing S256 PKCE code_challenge."""
+    try:
+        issued = oauth_server.issue_authorization_code(
+            response_type=response_type,
+            client_id=client_id,
+            redirect_uri=redirect_uri,
+            code_challenge=code_challenge,
+            code_challenge_method=code_challenge_method,
+            state=state,
+            scope=scope,
+        )
+        return JSONResponse(status_code=200, content=issued)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/oauth/token")
+async def oauth_token(request: Request) -> JSONResponse:
+    """OAuth 2.1 Token Endpoint verifying S256 PKCE `code_verifier` or `refresh_token`."""
+    raw_body = (await request.body()).decode("utf-8", errors="ignore").strip()
+    body: Dict[str, Any] = {}
+    if raw_body.startswith("{"):
+        try:
+            body = json.loads(raw_body)
+        except Exception:
+            body = {}
+    else:
+        parsed_qs = parse_qs(raw_body, keep_blank_values=True)
+        body = {k: (v[0] if v else "") for k, v in parsed_qs.items()}
+
+    try:
+        token_data = oauth_server.exchange_code_for_token(
+            grant_type=str(body.get("grant_type", "")),
+            code=str(body.get("code", "")),
+            client_id=str(body.get("client_id", "")),
+            redirect_uri=str(body.get("redirect_uri", "")),
+            code_verifier=str(body.get("code_verifier", "")),
+            refresh_token=str(body.get("refresh_token", "")),
+        )
+        return JSONResponse(status_code=200, content=token_data)
+    except ValueError as exc:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "invalid_grant", "error_description": str(exc)},
+        )
+
+
+# ==============================================================================
+# REST API & DOWNLOAD / MANIFEST ENDPOINTS
+# ==============================================================================
+
+@app.get("/api/presets")
+def api_presets() -> Dict[str, Any]:
+    return {"presets": get_all_presets()}
+
+
+@app.get("/api/quota")
+def api_quota_status(workspace_id: str = "default-workspace", api_key: Optional[str] = None) -> Dict[str, Any]:
+    return quota_manager.get_status(workspace_id=workspace_id, api_key=api_key)
+
+
+@app.post("/api/quota/upgrade")
+def api_quota_upgrade(workspace_id: str = "default-workspace") -> Dict[str, Any]:
+    return quota_manager.upgrade_to_pro(workspace_id=workspace_id)
+
+
+@app.post("/api/extract")
+def api_extract_document(req: ExtractDocumentRequest) -> Dict[str, Any]:
+    try:
+        quota_state = quota_manager.consume_document(req.workspace_id, api_key=req.api_key)
+    except PermissionError as exc:
+        raise HTTPException(status_code=402, detail=str(exc)) from exc
+    result = extract_financial_document(req, quota_state=quota_state)
+    return result.model_dump()
+
+
+@app.post("/api/reconcile")
+def api_reconcile_ledger(req: ReconcileLedgerRequest) -> Dict[str, Any]:
+    report = reconcile_invoices_with_bank_ledger(req)
+    return report.model_dump()
+
+
+@app.post("/api/export")
+def api_export_bundle(req: ExportBundleRequest) -> Dict[str, Any]:
+    result = export_ledger_bundle(req)
+    return result.model_dump()
+
+
+@app.get("/downloads/{filename}")
+def download_exported_bundle(filename: str) -> FileResponse:
+    safe_base = sanitize_export_filename(Path(filename).stem)
+    ext = Path(filename).suffix.lower()
+    if ext not in (".xlsx", ".csv"):
+        raise HTTPException(status_code=400, detail="Unsupported file extension.")
+    resolved = (DEFAULT_EXPORT_DIR / f"{safe_base}{ext}").resolve()
+    if not resolved.is_file():
+        raise HTTPException(status_code=404, detail="Export file not found.")
+    media_type = (
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        if ext == ".xlsx"
+        else "text/csv"
+    )
+    return FileResponse(path=str(resolved), filename=resolved.name, media_type=media_type)
+
+
+def _resolve_public_origin(request: Request) -> str:
+    env_url = os.environ.get("PUBLIC_BASE_URL", "").strip().rstrip("/")
+    if env_url:
+        return env_url
+    base = str(request.base_url).rstrip("/")
+    if "testserver" in base:
+        return "http://localhost:8791"
+    if (request.headers.get("x-forwarded-proto") == "https" or "railway.app" in base) and base.startswith("http://"):
+        base = "https://" + base[len("http://") :]
+    return base
+
+
+@app.get("/manifests/claude")
+def get_claude_manifest(request: Request) -> Dict[str, Any]:
+    manifest_path = PROJECT_ROOT / "claude-connector-manifest.json"
+    origin = _resolve_public_origin(request)
+    raw = manifest_path.read_text(encoding="utf-8").replace("http://localhost:8791", origin)
+    return json.loads(raw)
+
+
+@app.get("/manifests/openai")
+def get_openai_manifest(request: Request) -> Dict[str, Any]:
+    manifest_path = PROJECT_ROOT / "openai-mcp-app.json"
+    origin = _resolve_public_origin(request)
+    raw = manifest_path.read_text(encoding="utf-8").replace("http://localhost:8791", origin)
+    return json.loads(raw)
+
+
+if __name__ == "__main__":
+    host = os.environ.get("HOST", "0.0.0.0")
+    port = int(os.environ.get("PORT", "8791"))
+    uvicorn.run("app.main:app", host=host, port=port, reload=False)
