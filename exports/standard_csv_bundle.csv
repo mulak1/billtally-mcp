@@ -1,3 +1,0 @@
-InvoiceNumber,Vendor,IssueDate,DueDate,Currency,Category,LineNumber,Description,Quantity,UnitPrice,ReportedAmount,ExpectedAmount,MathVerified
-INL-2026-09,Inline Cloud Co,2026-10-12,,USD,General Operating Expense,1,Dedicated Worker Nodes,2.0,150.0,300.0,300.0,True
-INL-2026-09,Inline Cloud Co,2026-10-12,,USD,General Operating Expense,2,Load Balancer Tier,1.0,75.0,75.0,75.0,True
