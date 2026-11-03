@@ -16,7 +16,7 @@ from typing import Any, Dict, Optional
 from urllib.parse import parse_qs
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 import uvicorn
 
 from app.analytics import (
@@ -56,6 +56,30 @@ app = FastAPI(
 
 oauth_server = OAuth21Server(base_url="http://localhost:8791")
 quota_manager = QuotaManager()
+_OPENAI_CHALLENGE_STATE: Dict[str, str] = {"token": ""}
+
+
+@app.get("/.well-known/openai-apps-challenge", response_class=PlainTextResponse)
+def get_openai_challenge() -> PlainTextResponse:
+    """Serve OpenAI's domain verification challenge token."""
+    token = _OPENAI_CHALLENGE_STATE.get("token") or os.environ.get("OPENAI_APPS_CHALLENGE", "").strip()
+    return PlainTextResponse(content=token)
+
+
+@app.post("/api/admin/openai-challenge")
+async def set_openai_challenge(request: Request) -> JSONResponse:
+    """Dynamically set the OpenAI domain verification token without redeploying."""
+    raw = await request.json()
+    token = str(raw.get("token", "")).strip()
+    _OPENAI_CHALLENGE_STATE["token"] = token
+    return JSONResponse(status_code=200, content={"success": True, "token": token})
+
+
+@app.get("/openai-plugin.zip")
+def download_openai_plugin_zip() -> FileResponse:
+    """Download the ready-to-upload Portable Agent Plugins .zip package for platform.openai.com/plugins."""
+    zip_path = PROJECT_ROOT / "billtally-openai-plugin.zip"
+    return FileResponse(path=str(zip_path), filename="billtally-openai-plugin.zip", media_type="application/zip")
 
 
 @app.get("/", response_class=HTMLResponse)

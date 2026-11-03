@@ -88,3 +88,30 @@ Always present the user with ready-to-paste blocks for all 10 steps:
   - **Additional notes:** Note that the server is stateless, first-party, processes data in ephemeral memory only, never trains on user data, and has live IT admin documentation at `/docs`.
 - **Step 10 (Review & Submit):**
   - Submit!
+
+
+---
+
+## 3. OpenAI ChatGPT / Codex Public Plugin Directory Submission (`platform.openai.com/plugins`)
+
+Learned from `https://developers.openai.com/plugins/deploy/submission.md`:
+
+1. **Pre-Built Portable Agent Plugins `.zip` Package (`<app>-openai-plugin.zip`):**
+   - OpenAI's developer portal (`https://platform.openai.com/plugins` → **Upload new or existing plugin**) accepts a `.zip` package that **auto-populates almost the entire listing AND review form** when structured using the Portable Agent Plugins format:
+     - `plugin.json` at root with `"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"` and `extensions.com.openai`:
+       - `interface.displayName` (<= 30 chars)
+       - `interface.shortDescription` (<= 30 chars)
+       - `interface.longDescription` (<= 4000 chars)
+       - `interface.developerName`: `"Kader Mula"`
+       - `interface.category`: `"Business & Operations"` or `"Productivity"`
+       - `interface.websiteURL`, `supportURL` (`/docs`), `privacyPolicyURL` (`/privacy`), `termsOfServiceURL` (`/terms`) — **all 4 URLs are required for MCP review!**
+       - `interface.composerIcon`, `composerIconDark`, `logo`, `logoDark`, `screenshots` (`./assets/*.png`)
+       - `onboardingSkill`: `"./skills/<skill-name>/SKILL.md"`
+       - `review.test_cases.positive`: **EXACTLY 5 positive test cases** (`description`, `prompt`, `tools_triggered`, `expected_behavior`)
+       - `review.test_cases.negative`: **EXACTLY 3 negative test cases** (`description`, `prompt`)
+       - `review.demo_recording_url`, `review.commerce: false`, `review.commerce_description`
+       - `publication.release_notes`
+     - `mcp.json` at root with `"$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json"` and `"type": "streamable-http"`, `"url": "https://<service>.up.railway.app/mcp"`.
+     - **CRITICAL:** Do NOT include `.app.json` or `hooks/` in a public submission `.zip` (OpenAI rejects packages containing `.app.json` or lifecycle hooks).
+2. **Domain Verification Endpoint (`/.well-known/openai-apps-challenge`):**
+   - Expose `GET /.well-known/openai-apps-challenge` returning a `PlainTextResponse` with the exact token (and `POST /api/admin/openai-challenge` to update the token dynamically in 1 second when the user reaches the MCP Connect step on `platform.openai.com/plugins`).

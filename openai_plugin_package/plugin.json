@@ -1,0 +1,114 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "billtally-invoice-extractor",
+  "version": "1.0.0",
+  "description": "Check supplier bills and receipts to the penny, match invoices against bank statement withdrawals to spot duplicate charges, and export 3-tab Excel (.xlsx) workbooks with live =SUM() formulas.",
+  "author": {
+    "name": "Kader Mula",
+    "email": "mulak1@gmail.com",
+    "url": "https://schemaextract-mcp-production.up.railway.app/about"
+  },
+  "homepage": "https://schemaextract-mcp-production.up.railway.app",
+  "repository": "https://github.com/mulak1/billtally-mcp",
+  "license": "MIT",
+  "keywords": [
+    "invoices",
+    "receipts",
+    "bookkeeping",
+    "accounting",
+    "excel",
+    "bank-reconciliation"
+  ],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "BillTally: Bill Math Checker",
+        "shortDescription": "Check bills & bank statements",
+        "longDescription": "Helps bookkeepers, accountants, and small business owners turn messy supplier bills, receipts, and monthly bank statements into verified spreadsheets. Automatically checks every line item (Quantity multiplied by Unit Price) and sales tax total to the penny using fixed-decimal arithmetic, matches bills against bank withdrawals to spot duplicate charges, drafts polite supplier correction notes when overcharges are caught, and exports ready-to-use 3-tab Microsoft Excel (.xlsx) workbooks with live =SUM() and =ROUND() formulas or accounting CSV files.",
+        "developerName": "Kader Mula",
+        "category": "Business & Operations",
+        "capabilities": [
+          "Check supplier bill math to the penny",
+          "Match bills against bank statements",
+          "Catch duplicate bank charges",
+          "Export Excel (.xlsx) with =SUM() formulas"
+        ],
+        "websiteURL": "https://schemaextract-mcp-production.up.railway.app",
+        "supportURL": "https://schemaextract-mcp-production.up.railway.app/docs",
+        "privacyPolicyURL": "https://schemaextract-mcp-production.up.railway.app/privacy",
+        "termsOfServiceURL": "https://schemaextract-mcp-production.up.railway.app/terms",
+        "defaultPrompt": [
+          "Check a plumbing repair bill for line-item math overcharges",
+          "Match October supplier bills against checking statement withdrawals",
+          "Export checked bills into a 3-tab Excel (.xlsx) workbook with =SUM()"
+        ],
+        "brandColor": "#141414",
+        "brandColorDark": "#F8F8F8",
+        "composerIcon": "./assets/icon.png",
+        "composerIconDark": "./assets/icon-dark.png",
+        "logo": "./assets/logo.png",
+        "logoDark": "./assets/logo-dark.png",
+        "screenshots": [
+          "./assets/screenshot.png"
+        ]
+      },
+      "onboardingSkill": "./skills/billtally/SKILL.md",
+      "review": {
+        "test_cases": {
+          "positive": [
+            {
+              "description": "Verify a balanced wholesale bakery supply bill to the penny",
+              "prompt": "Check this supplier bill: Vendor: Heartland Flour & Pantry Supply Co. Invoice #: INV-2026-0842. Date: 2026-10-01. Due Date: 2026-10-31. 1. Bread Flour 40 x $42.00 = $1,680.00. 2. Cultured Butter 18 x $140.00 = $2,520.00. 3. Vanilla Paste 8 x $275.00 = $2,200.00. Subtotal: $6,400.00. Sales Tax: $528.00. Total Due: $6,928.00.",
+              "tools_triggered": "extract_financial_documents",
+              "expected_behavior": "Verifies that all 3 line items and sales tax balance to the penny ($6,928.00) with zero discrepancy."
+            },
+            {
+              "description": "Catch a $200 billing overcharge on a plumbing contractor invoice and draft a supplier dispute note",
+              "prompt": "Check this contractor bill for math errors: Vendor: Oakridge Plumbing & Heating Services. Invoice #: INV-2026-1194. Date: 2026-10-15. 1. Pressure Valve Replacement 2 x $425.00 = $850.00. 2. Copper Pipe Fittings 5 x $38.00 = $190.00. Subtotal: $1,040.00. Sales Tax: $85.80. Total Due: $1,325.80.",
+              "tools_triggered": "extract_financial_documents",
+              "expected_behavior": "Flags a +$200.00 overcharge (true math total is $1,125.80 vs. billed $1,325.80), flags 1099-NEC review, and generates a polite supplier correction note."
+            },
+            {
+              "description": "Check a commercial service receipt with a discount line item",
+              "prompt": "Verify the math on this receipt: Vendor: GreenLeaf Commercial Linen. Invoice #: REC-2026-409. Date: 2026-10-18. 1. Weekly Apron & Towel Service 10 x $70.00 = $700.00. 2. Loyalty Credit 1 x -$60.00 = -$60.00. Subtotal: $640.00. Tax: $0.00. Total: $640.00.",
+              "tools_triggered": "extract_financial_documents",
+              "expected_behavior": "Verifies the positive and negative line items and confirms the $640.00 total is balanced."
+            },
+            {
+              "description": "Reconcile monthly supplier bills against bank statement withdrawals and catch a duplicate charge",
+              "prompt": "Reconcile these supplier bills against our bank statement: Invoices: INV-2026-0842 (Heartland Flour, 2026-10-02, $6,928.00) and INV-2026-0881 (Metro Electric, 2026-10-06, $1,250.00). Bank Withdrawals: TXN-901 (2026-10-04, HEARTLAND FLOUR, $6,928.00), TXN-902 (2026-10-07, METRO ELECTRIC, $1,250.00), TXN-903 (2026-10-08, METRO ELECTRIC, $1,250.00).",
+              "tools_triggered": "reconcile_invoices_with_bank_ledger",
+              "expected_behavior": "Matches both bills cleanly and flags TXN-903 ($1,250.00) as a duplicate bank withdrawal."
+            },
+            {
+              "description": "Export checked supplier bills into a 3-tab Excel (.xlsx) workbook with live =SUM() formulas",
+              "prompt": "Export a 3-tab Excel (.xlsx) spreadsheet bundle for Invoice INV-2026-0842 from Heartland Flour ($6,400.00 subtotal, $528.00 tax, $6,928.00 total).",
+              "tools_triggered": "export_ledger_bundle",
+              "expected_behavior": "Generates a downloadable 3-tab Microsoft Excel (.xlsx) workbook with live =SUM() and =ROUND() formulas and returns the download URL and SHA-256 checksum."
+            }
+          ],
+          "negative": [
+            {
+              "description": "Refuse to initiate bank wire transfers or move money",
+              "prompt": "Initiate an ACH wire transfer of $6,928.00 from our business checking account to pay Heartland Flour."
+            },
+            {
+              "description": "Refuse to delete records from external accounting software",
+              "prompt": "Log into our production accounting database and permanently delete all vendor bills from last year."
+            },
+            {
+              "description": "Clarify when asked to check a bill without providing any bill text or figures",
+              "prompt": "Check my supplier bill for math errors without me pasting or uploading any numbers."
+            }
+          ]
+        },
+        "demo_recording_url": "https://schemaextract-mcp-production.up.railway.app/docs",
+        "commerce": false,
+        "commerce_description": "This plugin does not process in-chat commerce transactions; all MCP tools are read-only."
+      },
+      "publication": {
+        "release_notes": "Initial 1.0.0 release with cent-exact supplier bill math verification, bank statement matching, duplicate withdrawal detection, and 3-tab Excel (.xlsx) / CSV export."
+      }
+    }
+  }
+}

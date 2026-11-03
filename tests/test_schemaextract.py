@@ -601,6 +601,17 @@ def test_web_studio_and_submission_manifests(client: TestClient):
     for path_item in openapi_data["paths"].values():
         assert "content" in path_item["post"]["responses"]["200"]
 
+    # Verify OpenAI domain verification challenge & plugin zip download
+    set_chal = client.post("/api/admin/openai-challenge", json={"token": "openai-verify-billtally-123"})
+    assert set_chal.status_code == 200
+    get_chal = client.get("/.well-known/openai-apps-challenge")
+    assert get_chal.status_code == 200
+    assert get_chal.text == "openai-verify-billtally-123"
+
+    zip_res = client.get("/openai-plugin.zip")
+    assert zip_res.status_code == 200
+    assert len(zip_res.content) > 1000
+
     # Verify REST API endpoints used by Web Studio
     presets_res = client.get("/api/presets")
     assert presets_res.status_code == 200
