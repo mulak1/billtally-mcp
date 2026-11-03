@@ -56,15 +56,6 @@ MCP_TOOLS_CATALOG: List[Dict[str, Any]] = [
                     "default": True,
                     "description": "When true, enforces cent-exact verification across every line item (Quantity multiplied by Unit Price) and sales tax total.",
                 },
-                "workspace_id": {
-                    "type": "string",
-                    "default": "default-workspace",
-                    "description": "Workspace identifier used for monthly document quota tracking.",
-                },
-                "api_key": {
-                    "type": "string",
-                    "description": "Optional BillTally Pro subscription key for high-volume monthly batches.",
-                },
             },
             "required": ["raw_text"],
         },
@@ -130,10 +121,10 @@ MCP_TOOLS_CATALOG: List[Dict[str, Any]] = [
     },
     {
         "name": "export_ledger_bundle",
-        "title": "Export Multi-Tab Excel or Accounting CSV Spreadsheet",
+        "title": "Format Multi-Tab Excel or Accounting CSV Spreadsheet",
         "description": (
-            "Generates a downloadable multi-tab Microsoft Excel (.xlsx) workbook with native SUM "
-            "and ROUND accounting formulas, or a clean CSV spreadsheet for accounting software import."
+            "Statelessly formats checked supplier bills in memory into a multi-tab Microsoft Excel (.xlsx) "
+            "workbook with SUM and ROUND accounting formulas, or a clean CSV spreadsheet preview."
         ),
         "inputSchema": {
             "type": "object",
@@ -159,18 +150,18 @@ MCP_TOOLS_CATALOG: List[Dict[str, Any]] = [
                 "bundle_name": {
                     "type": "string",
                     "default": "billtally_ledger",
-                    "description": "Base filename for the generated Excel or CSV spreadsheet bundle.",
+                    "description": "Label for the formatted Excel or CSV spreadsheet output.",
                 },
                 "use_corrected_amounts": {
                     "type": "boolean",
                     "default": False,
-                    "description": "When true, exports verified true math totals instead of overcharged billed figures.",
+                    "description": "When true, formats the spreadsheet using verified true math totals instead of overcharged billed figures.",
                 },
             },
             "required": ["documents"],
         },
         "annotations": {
-            "title": "Export Excel or Accounting CSV Spreadsheet",
+            "title": "Format Excel or Accounting CSV Spreadsheet",
             "readOnlyHint": True,
             "destructiveHint": False,
             "idempotentHint": True,
