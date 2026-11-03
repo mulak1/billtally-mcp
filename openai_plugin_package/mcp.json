@@ -3,7 +3,14 @@
   "mcpServers": {
     "billtally": {
       "type": "streamable-http",
-      "url": "https://schemaextract-mcp-production.up.railway.app/mcp"
+      "url": "https://schemaextract-mcp-production.up.railway.app/mcp",
+      "extensions": {
+        "com.openai": {
+          "auth": {
+            "type": "none"
+          }
+        }
+      }
     }
   }
 }
