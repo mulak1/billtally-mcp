@@ -21,7 +21,12 @@ STUDIO_CLIENT_JS = """
       const res = await fetch('/api/presets');
       const data = await res.json();
       data.presets.forEach(p => { PRESETS[p.id] = p; });
-      await refreshQuota();
+      if (window.location.search.includes('pro_activated=1') || localStorage.getItem('bt_pro_active') === '1') {
+        localStorage.setItem('bt_pro_active', '1');
+        await upgradePro();
+      } else {
+        await refreshQuota();
+      }
       await loadPreset('messy_saas_invoice');
     }
 
@@ -47,6 +52,10 @@ STUDIO_CLIENT_JS = """
       const q = await res.json();
       CURRENT_API_KEY = q.api_key;
       await refreshQuota();
+      const hLink = document.getElementById('headerUpgradeLink');
+      if (hLink) hLink.textContent = '✓ Pro Plan Active ($49.99)';
+      const sLink = document.getElementById('sidebarUpgradeLink');
+      if (sLink) sLink.textContent = '✓ Pro Plan Active';
       document.getElementById('download-status').textContent =
         'Upgraded to Pro Plan (5,000 bills/mo enabled). Pro Key: ' + q.api_key;
     }

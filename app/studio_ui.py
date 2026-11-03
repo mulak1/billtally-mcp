@@ -147,7 +147,8 @@ def render_studio_html() -> str:
         <div style="margin-bottom:8px;">
           <strong id="tier-name">Free Plan</strong> · <span id="quota-used">0</span> of <span id="quota-limit">15</span> bills checked
         </div>
-        <button class="btn" style="width:100%; justify-content:center;" onclick="upgradePro()">Upgrade to Pro ($29/mo)</button>
+        <a id="sidebarUpgradeLink" class="btn btn-primary" href="https://buy.stripe.com/bJedR9cK12BN90903MfAc01" target="_blank" rel="noopener" style="width:100%; justify-content:center; margin-bottom:6px;">Upgrade via Stripe ($49.99) →</a>
+        <button class="btn" style="width:100%; justify-content:center; font-size:11.5px;" onclick="upgradePro()">Upgrade to Pro ($29/mo)</button>
       </div>
     </aside>
 
@@ -158,6 +159,7 @@ def render_studio_html() -> str:
         <a href="/analytics">Live Analytics</a>
         <a href="/privacy">Privacy Policy</a>
         <a href="/terms">Terms</a>
+        <a id="headerUpgradeLink" href="https://buy.stripe.com/bJedR9cK12BN90903MfAc01" target="_blank" rel="noopener" style="color:var(--positive); font-weight:600;">Upgrade ($49.99) →</a>
       </nav>
       <header class="greeting-bar">
         <div>

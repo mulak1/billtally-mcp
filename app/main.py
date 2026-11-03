@@ -87,7 +87,11 @@ def download_openai_plugin_zip() -> FileResponse:
 def studio_home(request: Request) -> HTMLResponse:
     """Serve the Interactive Financial Accounting Web Studio & Store Listing Preview."""
     src = detect_source(request.headers.get("user-agent", ""), path="/")
-    record_event(event_type="page_view", source=src, detail="GET /")
+    if "pro_activated=1" in str(request.url.query):
+        quota_manager.upgrade_to_pro()
+        record_event(event_type="pro_unlock", source=src, detail="Stripe Redirect")
+    else:
+        record_event(event_type="page_view", source=src, detail="GET /")
     return HTMLResponse(content=render_studio_html())
 
 
