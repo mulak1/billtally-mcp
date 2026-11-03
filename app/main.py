@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib.parse import parse_qs
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 import uvicorn
 
@@ -201,6 +201,8 @@ async def mcp_jsonrpc_endpoint(request: Request) -> JSONResponse:
             record_event(event_type="tool_call", source=src, tool_name=t_name, detail="MCP tools/call")
 
     resp_dict, status_code = handle_mcp_jsonrpc(payload, quota_manager=quota_manager)
+    if status_code == 202 or resp_dict is None:
+        return Response(status_code=202)
     return JSONResponse(status_code=status_code, content=resp_dict)
 
 
@@ -209,10 +211,17 @@ async def mcp_jsonrpc_endpoint(request: Request) -> JSONResponse:
 # ==============================================================================
 
 @app.get("/.well-known/oauth-authorization-server")
-def oauth_metadata(request: Request) -> Dict[str, Any]:
+def oauth_metadata(request: Request) -> Response:
     """RFC 8414 OAuth 2.1 Authorization Server Metadata with S256 PKCE support."""
+    is_prod_https = (
+        request.headers.get("x-forwarded-proto") == "https"
+        or "railway.app" in str(request.base_url)
+        or bool(os.environ.get("PUBLIC_BASE_URL"))
+    )
+    if is_prod_https and request.query_params.get("oauth") != "1":
+        return JSONResponse(status_code=404, content={"detail": "Not Found"})
     base = _resolve_public_origin(request)
-    return oauth_server.metadata(base_url=base)
+    return JSONResponse(status_code=200, content=oauth_server.metadata(base_url=base))
 
 
 @app.post("/oauth/register")

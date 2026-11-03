@@ -218,8 +218,8 @@ def handle_mcp_jsonrpc(
     req_id = payload.get("id")
     params = payload.get("params") or {}
 
-    if method.startswith("notifications/"):
-        return ({"jsonrpc": "2.0", "status": "acknowledged", "method": method}, 200)
+    if method.startswith("notifications/") or req_id is None:
+        return (None, 202)
 
     if method == "initialize":
         return (
