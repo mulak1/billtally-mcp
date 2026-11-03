@@ -16,6 +16,9 @@ def render_studio_html() -> str:
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>BillTally: Bill Math Checker, Bank Statement Matcher & Spreadsheet Exporter</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="icon" type="image/png" href="/icon.png" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -37,7 +40,7 @@ def render_studio_html() -> str:
     .shell { display: grid; grid-template-columns: 252px 1fr; min-height: 100vh; }
     .sidebar { background: var(--ground); border-right: 1px solid var(--border); padding: 28px 16px; display: flex; flex-direction: column; justify-content: space-between; }
     .brand { display: flex; align-items: center; gap: 10px; padding: 0 8px 18px; border-bottom: 1px solid var(--border); }
-    .brand-mark { width: 24px; height: 24px; border: 1.5px solid var(--text); border-radius: 5px; display: grid; place-items: center; font-family: var(--mono); font-size: 12px; font-weight: 500; }
+    .brand-mark { width: 34px; height: 34px; border-radius: 8px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
     .nav-group-label { font-size: 12px; color: var(--muted); padding: 18px 8px 6px; }
     .nav-item { display: flex; align-items: center; height: 32px; padding: 0 10px; border-radius: 6px; color: var(--text); text-decoration: none; font-size: 13.5px; margin-bottom: 2px; cursor: pointer; }
     .nav-item.active { background: #e9e9e9; font-weight: 500; }
@@ -101,7 +104,24 @@ def render_studio_html() -> str:
     <aside class="sidebar" aria-label="Workspace Navigation">
       <div>
         <div class="brand">
-          <div class="brand-mark">BT</div>
+          <div class="brand-mark" aria-hidden="true">
+            <svg width="34" height="34" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <rect width="48" height="48" rx="11" fill="#111827" stroke="#374151" stroke-width="2"/>
+              <rect x="8" y="8" width="23" height="26" rx="3" fill="#1F2937" stroke="#4B5563" stroke-width="1.2"/>
+              <rect x="11.5" y="10.5" width="26" height="27.5" rx="3.5" fill="#F8FAFC" stroke="#E2E8F0" stroke-width="1.2"/>
+              <path d="M11.5 14C11.5 12.1 13.1 10.5 15 10.5H34C35.9 10.5 37.5 12.1 37.5 14V16.5H11.5V14Z" fill="#141414"/>
+              <rect x="14" y="12.7" width="9" height="1.8" rx="0.9" fill="#F8FAFC"/>
+              <rect x="29.5" y="12.7" width="5.5" height="1.8" rx="0.9" fill="#34D399"/>
+              <rect x="14" y="19.5" width="11" height="2" rx="1" fill="#475569"/>
+              <rect x="27.5" y="19" width="7.5" height="3" rx="1.2" fill="#DCFCE7"/>
+              <rect x="14" y="24.5" width="9.5" height="2" rx="1" fill="#475569"/>
+              <rect x="27.5" y="24" width="7.5" height="3" rx="1.2" fill="#DCFCE7"/>
+              <rect x="14" y="29.5" width="10.5" height="2" rx="1" fill="#475569"/>
+              <rect x="27.5" y="29" width="7.5" height="3" rx="1.2" fill="#FEE2E2"/>
+              <circle cx="35" cy="35" r="6.5" fill="#16A34A" stroke="#F8FAFC" stroke-width="1.5"/>
+              <path d="M32.3 35.1L34.1 36.9L37.9 33.1" stroke="#FFFFFF" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </div>
           <div>
             <div style="font-weight:500; font-size:14px;">BillTally</div>
             <div style="font-size:12px; color:var(--muted);">Bill & Bank Check Desk</div>

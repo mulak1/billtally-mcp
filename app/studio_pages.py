@@ -4,7 +4,28 @@ Styled with the `achromatic-ledger` design system (`#f8f8f8` paper ground, `#fff
 Geist & Geist Mono tabular numerals, zero em-dashes).
 """
 
+BILLTALLY_FAVICON_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">'
+    '<rect width="48" height="48" rx="11" fill="#111827" stroke="#374151" stroke-width="2"/>'
+    '<rect x="8" y="8" width="23" height="26" rx="3" fill="#1F2937" stroke="#4B5563" stroke-width="1.2"/>'
+    '<rect x="11.5" y="10.5" width="26" height="27.5" rx="3.5" fill="#F8FAFC" stroke="#E2E8F0" stroke-width="1.2"/>'
+    '<path d="M11.5 14C11.5 12.1 13.1 10.5 15 10.5H34C35.9 10.5 37.5 12.1 37.5 14V16.5H11.5V14Z" fill="#141414"/>'
+    '<rect x="14" y="12.7" width="9" height="1.8" rx="0.9" fill="#F8FAFC"/>'
+    '<rect x="29.5" y="12.7" width="5.5" height="1.8" rx="0.9" fill="#34D399"/>'
+    '<rect x="14" y="19.5" width="11" height="2" rx="1" fill="#475569"/>'
+    '<rect x="27.5" y="19" width="7.5" height="3" rx="1.2" fill="#DCFCE7"/>'
+    '<rect x="14" y="24.5" width="9.5" height="2" rx="1" fill="#475569"/>'
+    '<rect x="27.5" y="24" width="7.5" height="3" rx="1.2" fill="#DCFCE7"/>'
+    '<rect x="14" y="29.5" width="10.5" height="2" rx="1" fill="#475569"/>'
+    '<rect x="27.5" y="29" width="7.5" height="3" rx="1.2" fill="#FEE2E2"/>'
+    '<circle cx="35" cy="35" r="6.5" fill="#16A34A" stroke="#F8FAFC" stroke-width="1.5"/>'
+    '<path d="M32.3 35.1L34.1 36.9L37.9 33.1" stroke="#FFFFFF" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/>'
+    "</svg>"
+)
+
 SHARED_PAGE_STYLE = """
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="icon" type="image/png" href="/icon.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">

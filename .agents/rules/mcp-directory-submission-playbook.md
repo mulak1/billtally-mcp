@@ -115,3 +115,11 @@ Learned from `https://developers.openai.com/plugins/deploy/submission.md`:
      - **CRITICAL:** Do NOT include `.app.json` or `hooks/` in a public submission `.zip` (OpenAI rejects packages containing `.app.json` or lifecycle hooks).
 2. **Domain Verification Endpoint (`/.well-known/openai-apps-challenge`):**
    - Expose `GET /.well-known/openai-apps-challenge` returning a `PlainTextResponse` with the exact token (and `POST /api/admin/openai-challenge` to update the token dynamically in 1 second when the user reaches the MCP Connect step on `platform.openai.com/plugins`).
+
+
+6. **OpenAI MCP Tool Scan & Authentication Discovery Rules (Critical)**
+   - **Declare `auth.type: "none"` in `mcp.json`**: Under `mcpServers.<name>.extensions["com.openai"].auth`, explicitly set `{"type": "none"}` for unauthenticated public MCP servers.
+   - **Return `HTTP 404` on `GET /.well-known/oauth-authorization-server` on production HTTPS**: OpenAI's MCP scanner probes 9 OAuth/OIDC discovery paths (`/.well-known/oauth-protected-resource`, `/.well-known/oauth-authorization-server`, `/.well-known/openid-configuration`). If `/.well-known/oauth-authorization-server` returns `200 OK`, OpenAI locks the server into `Authentication: OAuth` (`Authorization unavailable`) and aborts the tool scan with `The latest scan did not complete. Try rescanning.`.
+   - **Return `HTTP 202 Accepted` (empty body) on JSON-RPC notifications (`notifications/initialized`) in `POST /mcp`**: Streamable HTTP MCP clients expect `202 Accepted` rather than `200 OK` with `"id": null`.
+   - **Require explicit `"required"` arrays in `inputSchema` & pure stateless computation descriptions**: When `readOnlyHint: true`, avoid `*_base64` binary upload parameters or server-side file-persistence wording so OpenAI's automated tool classifier passes with 0 findings.
+   - **Final `Submit for review` Modal (`Additional Submission Context`)**: Check all 6 policy attestation checkboxes and include a concise reviewer justification note explaining why all tools use `readOnlyHint=true`, `destructiveHint=false`, `openWorldHint=false` and confirming that no login or test credentials are required (`auth.type: "none"`).

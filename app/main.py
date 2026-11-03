@@ -38,6 +38,7 @@ from app.oauth_quota import OAuth21Server, QuotaManager
 from app.presets import get_all_presets
 from app.reconciler import reconcile_invoices_with_bank_ledger
 from app.studio_pages import (
+    BILLTALLY_FAVICON_SVG,
     render_about_html,
     render_docs_html,
     render_privacy_html,
@@ -136,19 +137,29 @@ def health_check() -> Dict[str, Any]:
 
 @app.get("/privacy", response_class=HTMLResponse)
 def privacy_policy() -> HTMLResponse:
-    """Plain-English Privacy & Confidentiality Policy HTML page required by Claude and ChatGPT directories."""
     return HTMLResponse(content=render_privacy_html())
 
 
 @app.get("/terms", response_class=HTMLResponse)
 def terms_of_service() -> HTMLResponse:
-    """Plain-English Terms of Service & Disclaimer HTML page required by Claude and ChatGPT directories."""
     return HTMLResponse(content=render_terms_html())
 
 
-# ==============================================================================
-# STREAMABLE HTTP MCP ENDPOINTS (`GET /mcp` & `POST /mcp`)
-# ==============================================================================
+@app.get("/favicon.svg")
+def get_favicon_svg() -> Response:
+    return Response(content=BILLTALLY_FAVICON_SVG, media_type="image/svg+xml")
+
+
+@app.get("/favicon.ico")
+def get_favicon_ico() -> Response:
+    ico = PROJECT_ROOT / "openai_plugin_package" / "assets" / "favicon.ico"
+    return Response(content=ico.read_bytes(), media_type="image/x-icon") if ico.exists() else get_favicon_svg()
+
+
+@app.get("/icon.png")
+@app.get("/apple-touch-icon.png")
+def get_icon_png() -> Response:
+    return Response(content=(PROJECT_ROOT / "openai_plugin_package" / "assets" / "icon.png").read_bytes(), media_type="image/png")
 
 @app.get("/mcp")
 def mcp_discovery() -> Dict[str, Any]:
