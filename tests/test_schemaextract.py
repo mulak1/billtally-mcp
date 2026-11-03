@@ -584,6 +584,23 @@ def test_web_studio_and_submission_manifests(client: TestClient):
     doc_alias_res = client.get("/documentation")
     assert doc_alias_res.status_code == 200
 
+    # Verify /analytics, /api/analytics, and /chatgpt-openapi.json
+    analytics_html = client.get("/analytics")
+    assert analytics_html.status_code == 200
+    assert "BillTally Live Analytics" in analytics_html.text
+
+    analytics_json = client.get("/api/analytics")
+    assert analytics_json.status_code == 200
+    assert analytics_json.json()["service"] == "BillTally"
+    assert "by_source" in analytics_json.json()
+
+    openapi_res = client.get("/chatgpt-openapi.json")
+    assert openapi_res.status_code == 200
+    openapi_data = openapi_res.json()
+    assert openapi_data["openapi"] == "3.1.0"
+    for path_item in openapi_data["paths"].values():
+        assert "content" in path_item["post"]["responses"]["200"]
+
     # Verify REST API endpoints used by Web Studio
     presets_res = client.get("/api/presets")
     assert presets_res.status_code == 200

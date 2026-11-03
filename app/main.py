@@ -19,6 +19,13 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 import uvicorn
 
+from app.analytics import (
+    build_chatgpt_openapi,
+    detect_source,
+    get_analytics_snapshot,
+    record_event,
+    render_analytics_html,
+)
 from app.exporter import DEFAULT_EXPORT_DIR, export_ledger_bundle, sanitize_export_filename
 from app.extractor import extract_financial_document
 from app.mcp_server import MCP_PROTOCOL_VERSION, MCP_TOOLS_CATALOG, handle_mcp_jsonrpc
@@ -52,9 +59,30 @@ quota_manager = QuotaManager()
 
 
 @app.get("/", response_class=HTMLResponse)
-def studio_home() -> HTMLResponse:
+def studio_home(request: Request) -> HTMLResponse:
     """Serve the Interactive Financial Accounting Web Studio & Store Listing Preview."""
+    src = detect_source(request.headers.get("user-agent", ""), path="/")
+    record_event(event_type="page_view", source=src, detail="GET /")
     return HTMLResponse(content=render_studio_html())
+
+
+@app.get("/analytics", response_class=HTMLResponse)
+def analytics_page() -> HTMLResponse:
+    """Serve the live HTML Analytics Dashboard across Claude, ChatGPT, and Web."""
+    return HTMLResponse(content=render_analytics_html())
+
+
+@app.get("/api/analytics")
+def api_analytics() -> Dict[str, Any]:
+    """Return the live privacy-safe telemetry snapshot in JSON format."""
+    return get_analytics_snapshot()
+
+
+@app.get("/chatgpt-openapi.json")
+def chatgpt_openapi_spec(request: Request) -> Dict[str, Any]:
+    """Return the OpenAPI 3.1.0 specification for ChatGPT custom plugin / Actions."""
+    origin = _resolve_public_origin(request)
+    return build_chatgpt_openapi(base_url=origin)
 
 
 @app.get("/about", response_class=HTMLResponse)
@@ -127,6 +155,7 @@ async def mcp_jsonrpc_endpoint(request: Request) -> JSONResponse:
             },
         )
 
+    ua = request.headers.get("user-agent", "")
     if isinstance(payload, list):
         responses = []
         for item in payload:
@@ -134,6 +163,18 @@ async def mcp_jsonrpc_endpoint(request: Request) -> JSONResponse:
             if resp is not None:
                 responses.append(resp)
         return JSONResponse(status_code=200, content=responses)
+
+    if isinstance(payload, dict):
+        method = payload.get("method", "")
+        params = payload.get("params") or {}
+        req_id = str(payload.get("id", ""))
+        client_name = (params.get("clientInfo") or {}).get("name", "") if isinstance(params, dict) else ""
+        src = "Web Desk" if req_id.startswith("studio-") else detect_source(ua, path="/mcp", client_name=client_name)
+        if method == "initialize":
+            record_event(event_type="mcp_connect", source=src, detail=client_name or "MCP initialize")
+        elif method == "tools/call":
+            t_name = str(params.get("name", "-"))
+            record_event(event_type="tool_call", source=src, tool_name=t_name, detail="MCP tools/call")
 
     resp_dict, status_code = handle_mcp_jsonrpc(payload, quota_manager=quota_manager)
     return JSONResponse(status_code=status_code, content=resp_dict)
@@ -236,34 +277,42 @@ def api_quota_status(workspace_id: str = "default-workspace", api_key: Optional[
 
 
 @app.post("/api/quota/upgrade")
-def api_quota_upgrade(workspace_id: str = "default-workspace") -> Dict[str, Any]:
+def api_quota_upgrade(request: Request, workspace_id: str = "default-workspace") -> Dict[str, Any]:
+    src = detect_source(request.headers.get("user-agent", ""), path="/api/quota/upgrade")
+    record_event(event_type="pro_unlock", source=src, detail=workspace_id)
     return quota_manager.upgrade_to_pro(workspace_id=workspace_id)
 
 
 @app.post("/api/extract")
-def api_extract_document(req: ExtractDocumentRequest) -> Dict[str, Any]:
+def api_extract_document(req: ExtractDocumentRequest, request: Request) -> Dict[str, Any]:
     try:
         quota_state = quota_manager.consume_document(req.workspace_id, api_key=req.api_key)
     except PermissionError as exc:
         raise HTTPException(status_code=402, detail=str(exc)) from exc
     result = extract_financial_document(req, quota_state=quota_state)
+    src = detect_source(request.headers.get("user-agent", ""), path="/api/extract")
+    record_event(event_type="tool_call", source=src, tool_name="extract_financial_documents", detail=result.invoice_number)
     return result.model_dump()
 
 
 @app.post("/api/reconcile")
-def api_reconcile_ledger(req: ReconcileLedgerRequest) -> Dict[str, Any]:
+def api_reconcile_ledger(req: ReconcileLedgerRequest, request: Request) -> Dict[str, Any]:
     report = reconcile_invoices_with_bank_ledger(req)
+    src = detect_source(request.headers.get("user-agent", ""), path="/api/reconcile")
+    record_event(event_type="tool_call", source=src, tool_name="reconcile_invoices_with_bank_ledger", detail=f"{len(req.invoices)} bills")
     return report.model_dump()
 
 
 @app.post("/api/export")
-def api_export_bundle(req: ExportBundleRequest) -> Dict[str, Any]:
+def api_export_bundle(req: ExportBundleRequest, request: Request) -> Dict[str, Any]:
     result = export_ledger_bundle(req)
+    src = detect_source(request.headers.get("user-agent", ""), path="/api/export")
+    record_event(event_type="tool_call", source=src, tool_name="export_ledger_bundle", detail=result.filename)
     return result.model_dump()
 
 
 @app.get("/downloads/{filename}")
-def download_exported_bundle(filename: str) -> FileResponse:
+def download_exported_bundle(filename: str, request: Request) -> FileResponse:
     safe_base = sanitize_export_filename(Path(filename).stem)
     ext = Path(filename).suffix.lower()
     if ext not in (".xlsx", ".csv"):
@@ -271,6 +320,8 @@ def download_exported_bundle(filename: str) -> FileResponse:
     resolved = (DEFAULT_EXPORT_DIR / f"{safe_base}{ext}").resolve()
     if not resolved.is_file():
         raise HTTPException(status_code=404, detail="Export file not found.")
+    src = detect_source(request.headers.get("user-agent", ""), path="/downloads")
+    record_event(event_type="spreadsheet_download", source=src, tool_name="export_ledger_bundle", detail=resolved.name)
     media_type = (
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         if ext == ".xlsx"

@@ -135,6 +135,7 @@ def render_studio_html() -> str:
       <nav class="top-bar-links" aria-label="Company and documentation links">
         <a href="/about">About</a>
         <a href="/docs">Documentation</a>
+        <a href="/analytics">Live Analytics</a>
         <a href="/privacy">Privacy Policy</a>
         <a href="/terms">Terms</a>
       </nav>
