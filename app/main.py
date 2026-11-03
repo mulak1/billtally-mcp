@@ -56,7 +56,7 @@ app = FastAPI(
 
 oauth_server = OAuth21Server(base_url="http://localhost:8791")
 quota_manager = QuotaManager()
-_OPENAI_CHALLENGE_STATE: Dict[str, str] = {"token": ""}
+_OPENAI_CHALLENGE_STATE: Dict[str, str] = {"token": "YFsHN-fut-TBj-AukzfY5eO_uhEp47qd-ApSrLkjdPg"}
 
 
 @app.get("/.well-known/openai-apps-challenge", response_class=PlainTextResponse)
