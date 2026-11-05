@@ -1,9 +1,10 @@
 """BillTally (SchemaExtract MCP) — FastAPI Server Entrypoint (Port 8791)."""
 
+import hmac
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 from urllib.parse import parse_qs
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response
@@ -35,6 +36,23 @@ quota_manager = QuotaManager()
 _OPENAI_CHALLENGE_STATE: Dict[str, str] = {"token": "YFsHN-fut-TBj-AukzfY5eO_uhEp47qd-ApSrLkjdPg"}
 
 
+@app.middleware("http")
+async def security_headers_and_body_cap(request: Request, call_next: Callable) -> Response:
+    """Enforce a 5 MB payload cap and attach Cloudflare/OWASP security headers to every response."""
+    cl_header = request.headers.get("content-length")
+    if cl_header and cl_header.isdigit() and int(cl_header) > 5_000_000:
+        return JSONResponse(status_code=413, content={"error": "Payload too large"})
+    resp = await call_next(request)
+    resp.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains; preload"
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["X-Frame-Options"] = "DENY"
+    resp.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    resp.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=(), payment=()"
+    resp.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+    resp.headers["Content-Security-Policy"] = "base-uri 'self'; object-src 'none'; frame-ancestors 'none'"
+    return resp
+
+
 @app.get("/.well-known/openai-apps-challenge", response_class=PlainTextResponse)
 def get_openai_challenge() -> PlainTextResponse:
     """Serve OpenAI's domain verification challenge token."""
@@ -44,7 +62,11 @@ def get_openai_challenge() -> PlainTextResponse:
 
 @app.post("/api/admin/openai-challenge")
 async def set_openai_challenge(request: Request) -> JSONResponse:
-    """Dynamically set the OpenAI domain verification token without redeploying."""
+    """Protected admin endpoint to update the OpenAI domain verification token."""
+    admin_secret = os.environ.get("ADMIN_API_SECRET", "").strip()
+    provided = request.headers.get("x-admin-secret", "").strip()
+    if not admin_secret or not hmac.compare_digest(provided, admin_secret):
+        return JSONResponse(status_code=403, content={"error": "Forbidden: valid x-admin-secret required."})
     raw = await request.json()
     token = str(raw.get("token", "")).strip()
     _OPENAI_CHALLENGE_STATE["token"] = token
@@ -63,7 +85,6 @@ def studio_home(request: Request) -> HTMLResponse:
     """Serve the Interactive Financial Accounting Web Studio & Store Listing Preview."""
     src = detect_source(request.headers.get("user-agent", ""), path="/")
     if "pro_activated=1" in str(request.url.query):
-        quota_manager.upgrade_to_pro()
         record_event(event_type="pro_unlock", source=src, detail="Stripe Redirect")
     else:
         record_event(event_type="page_view", source=src, detail="GET /")
@@ -72,46 +93,33 @@ def studio_home(request: Request) -> HTMLResponse:
 
 @app.get("/analytics", response_class=HTMLResponse)
 def analytics_page() -> HTMLResponse:
-    """Serve the live HTML Analytics Dashboard across Claude, ChatGPT, and Web."""
     return HTMLResponse(content=render_analytics_html())
 
 
 @app.get("/api/analytics")
 def api_analytics() -> Dict[str, Any]:
-    """Return the live privacy-safe telemetry snapshot in JSON format."""
     return get_analytics_snapshot()
 
 
 @app.get("/chatgpt-openapi.json")
 def chatgpt_openapi_spec(request: Request) -> Dict[str, Any]:
-    """Return the OpenAPI 3.1.0 specification for ChatGPT custom plugin / Actions."""
-    origin = _resolve_public_origin(request)
-    return build_chatgpt_openapi(base_url=origin)
+    return build_chatgpt_openapi(base_url=_resolve_public_origin(request))
 
 
 @app.get("/about", response_class=HTMLResponse)
 def about_page() -> HTMLResponse:
-    """Serve the public About & Company Information HTML page."""
     return HTMLResponse(content=render_about_html())
 
 
 @app.get("/docs", response_class=HTMLResponse)
 @app.get("/documentation", response_class=HTMLResponse)
 def public_docs_page() -> HTMLResponse:
-    """Serve the public User & IT Administrator Documentation HTML page."""
     return HTMLResponse(content=render_docs_html())
 
 
 @app.get("/health")
 def health_check() -> Dict[str, Any]:
-    """Health check endpoint for Claude & ChatGPT MCP directory probes."""
-    return {
-        "status": "ok",
-        "service": "billtally-mcp",
-        "port": 8791,
-        "protocolVersion": MCP_PROTOCOL_VERSION,
-        "tools_count": len(MCP_TOOLS_CATALOG),
-    }
+    return {"status": "ok", "service": "billtally-mcp", "port": 8791, "protocolVersion": MCP_PROTOCOL_VERSION, "tools_count": len(MCP_TOOLS_CATALOG)}
 
 
 @app.get("/privacy", response_class=HTMLResponse)

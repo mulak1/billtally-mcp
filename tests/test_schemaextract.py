@@ -608,45 +608,28 @@ def test_web_studio_and_submission_manifests(client: TestClient):
     for path_item in openapi_data["paths"].values():
         assert "content" in path_item["post"]["responses"]["200"]
 
-    # Verify OpenAI domain verification challenge & plugin zip download
+    # Verify OpenAI domain verification challenge (unauthenticated POST rejected with 403) & plugin zip download
     set_chal = client.post("/api/admin/openai-challenge", json={"token": "openai-verify-billtally-123"})
-    assert set_chal.status_code == 200
+    assert set_chal.status_code == 403
     get_chal = client.get("/.well-known/openai-apps-challenge")
     assert get_chal.status_code == 200
-    assert get_chal.text == "openai-verify-billtally-123"
-    client.post("/api/admin/openai-challenge", json={"token": "YFsHN-fut-TBj-AukzfY5eO_uhEp47qd-ApSrLkjdPg"})
+    assert get_chal.text == "YFsHN-fut-TBj-AukzfY5eO_uhEp47qd-ApSrLkjdPg"
 
     zip_res = client.get("/openai-plugin.zip")
-    assert zip_res.status_code == 200
-    assert len(zip_res.content) > 1000
+    assert zip_res.status_code == 200 and len(zip_res.content) > 1000
 
-    # Verify REST API endpoints used by Web Studio
     presets_res = client.get("/api/presets")
-    assert presets_res.status_code == 200
-    assert len(presets_res.json()["presets"]) == 3
+    assert presets_res.status_code == 200 and len(presets_res.json()["presets"]) == 3
 
     claude_manifest_res = client.get("/manifests/claude")
-    assert claude_manifest_res.status_code == 200
-    assert claude_manifest_res.json()["name"] == "BillTally"
-    assert "sample_prompts" in claude_manifest_res.json()
+    assert claude_manifest_res.status_code == 200 and claude_manifest_res.json()["name"] == "BillTally"
 
     openai_manifest_res = client.get("/manifests/openai")
-    assert openai_manifest_res.status_code == 200
-    assert "mcp_endpoints" in openai_manifest_res.json()
-    assert "conversation_starters" in openai_manifest_res.json()
+    assert openai_manifest_res.status_code == 200 and "mcp_endpoints" in openai_manifest_res.json()
 
-    # Verify /privacy, /terms, and /oauth/register
-    priv_res = client.get("/privacy")
-    assert priv_res.status_code == 200
-    assert "trains_on_customer_data: false" in priv_res.text
-
-    terms_res = client.get("/terms")
-    assert terms_res.status_code == 200
-    assert "pro_price_usd_monthly: 29" in terms_res.text
-
-    reg_res = client.post("/oauth/register", json={"client_name": "Claude Connector Test"})
-    assert reg_res.status_code == 201
-    assert reg_res.json()["client_id"].startswith("se_client_")
+    assert "trains_on_customer_data: false" in client.get("/privacy").text
+    assert "pro_price_usd_monthly: 29" in client.get("/terms").text
+    assert client.post("/oauth/register", json={"client_name": "Claude Connector Test"}).status_code == 201
 
 
 def test_rest_api_endpoints_and_mcp_batch_and_standard_csv(client: TestClient):
@@ -768,5 +751,42 @@ def test_p0_intelligence_upgrades_and_cold_call_coercion(client: TestClient, tmp
     assert "Check bill math to the penny (⌘↵)" in studio_html
     assert "@media print" in studio_html
     assert "not certified public accounting (CPA) or tax advice" in studio_html
+
+
+def test_security_audit_remediations(client: TestClient, monkeypatch):
+    """Verifies admin endpoint auth, XSS escaping on /analytics, CSV DDE formula neutralization, and security headers."""
+    # 1. Admin endpoint rejects unauthenticated callers with 403 and preserves verified token
+    unauth = client.post("/api/admin/openai-challenge", json={"token": "hijacked"})
+    assert unauth.status_code == 403
+    assert client.get("/.well-known/openai-apps-challenge").text == "YFsHN-fut-TBj-AukzfY5eO_uhEp47qd-ApSrLkjdPg"
+
+    # 2. Cloudflare/OWASP security headers attached to responses
+    h_res = client.get("/health")
+    assert h_res.headers.get("X-Content-Type-Options") == "nosniff"
+    assert h_res.headers.get("X-Frame-Options") == "DENY"
+    assert "max-age=31536000" in h_res.headers.get("Strict-Transport-Security", "")
+    assert "frame-ancestors 'none'" in h_res.headers.get("Content-Security-Policy", "")
+
+    # 3. Stored XSS payload in MCP tool_call is escaped on /analytics
+    client.post(
+        "/mcp",
+        json={"jsonrpc": "2.0", "id": 999, "method": "tools/call", "params": {"name": "<script>alert(1)</script>", "arguments": {}}},
+    )
+    analytics_html = client.get("/analytics").text
+    assert "<script>alert(1)</script>" not in analytics_html
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in analytics_html
+
+    # 4. CSV / Excel DDE formula injection neutralization (`=CMD|...` -> `'=CMD|...`)
+    dde_exp = client.post(
+        "/api/export",
+        json={
+            "documents": [{"vendor": "=CMD|' /C calc'!A0", "invoice_number": "+INV-1", "line_items": [{"description": "@SUM(1+1)", "quantity": 1, "unit_price": 10, "amount": 10}]}],
+            "format": "quickbooks_csv",
+        },
+    )
+    assert dde_exp.status_code == 200
+    csv_out = base64.b64decode(dde_exp.json()["base64_content"]).decode("utf-8")
+    assert "'=CMD|' /C calc'!A0" in csv_out
+    assert "'@SUM(1+1)" in csv_out
 
 

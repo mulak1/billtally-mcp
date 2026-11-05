@@ -28,6 +28,12 @@ def sanitize_export_filename(raw_name: str) -> str:
     return cleaned[:80] if cleaned else "schemaextract_ledger"
 
 
+def _safe_cell_text(val: Any) -> str:
+    """Neutralize CSV/Excel formula injection (DDE) by prefixing leading formula characters on user strings."""
+    s = str(val if val is not None else "")
+    return f"'{s}" if s.startswith(("=", "+", "-", "@", "\t", "\r")) else s
+
+
 def _build_audit_memo(doc: Dict[str, Any], use_corrected_amounts: bool) -> str:
     """Return a deterministic audit trail memo for QuickBooks CSV and Excel exports."""
     if doc.get("math_verified", True):
@@ -71,12 +77,12 @@ def _build_xlsx_bytes(
         tot_val = float(doc.get("computed_total" if use_corrected_amounts else "total", 0.0))
         ws_summary.append(
             [
-                doc.get("document_id", f"doc_{idx}"),
-                doc.get("vendor", "Unknown Supplier"),
-                doc.get("invoice_number", "INV-UNKNOWN"),
-                doc.get("issue_date", "2026-10-01"),
-                doc.get("due_date") or "Due on Receipt",
-                doc.get("suggested_category", "General Operating Expense"),
+                _safe_cell_text(doc.get("document_id", f"doc_{idx}")),
+                _safe_cell_text(doc.get("vendor", "Unknown Supplier")),
+                _safe_cell_text(doc.get("invoice_number", "INV-UNKNOWN")),
+                _safe_cell_text(doc.get("issue_date", "2026-10-01")),
+                _safe_cell_text(doc.get("due_date") or "Due on Receipt"),
+                _safe_cell_text(doc.get("suggested_category", "General Operating Expense")),
                 sub_val,
                 float(doc.get("tax", 0.0)),
                 tot_val,
@@ -120,10 +126,10 @@ def _build_xlsx_bytes(
 
     line_row_idx = 2
     for doc in documents:
-        inv_no = doc.get("invoice_number", "INV-UNKNOWN")
-        vendor = doc.get("vendor", "Unknown Supplier")
-        dt = doc.get("issue_date", "2026-10-01")
-        cat = doc.get("suggested_category", "General Operating Expense")
+        inv_no = _safe_cell_text(doc.get("invoice_number", "INV-UNKNOWN"))
+        vendor = _safe_cell_text(doc.get("vendor", "Unknown Supplier"))
+        dt = _safe_cell_text(doc.get("issue_date", "2026-10-01"))
+        cat = _safe_cell_text(doc.get("suggested_category", "General Operating Expense"))
         for item in doc.get("line_items", []):
             amt_col = float(
                 item.get("expected_amount", item.get("amount", 0.0))
@@ -137,7 +143,7 @@ def _build_xlsx_bytes(
                     dt,
                     cat,
                     int(item.get("line_number", line_row_idx - 1)),
-                    str(item.get("description", "")),
+                    _safe_cell_text(item.get("description", "")),
                     float(item.get("quantity", 1.0)),
                     float(item.get("unit_price", 0.0)),
                     amt_col,
@@ -179,9 +185,9 @@ def _build_xlsx_bytes(
             ws_recon.append(
                 [
                     "Matched",
-                    m.get("invoice_number", ""),
-                    m.get("vendor", ""),
-                    m.get("bank_date", ""),
+                    _safe_cell_text(m.get("invoice_number", "")),
+                    _safe_cell_text(m.get("vendor", "")),
+                    _safe_cell_text(m.get("bank_date", "")),
                     float(m.get("invoice_amount", 0.0)),
                     float(m.get("bank_amount", 0.0)),
                     f"=ROUND(E{r_idx}-F{r_idx},2)",
@@ -193,9 +199,9 @@ def _build_xlsx_bytes(
             ws_recon.append(
                 [
                     "Unpaid Bill",
-                    u_inv.get("invoice_number", ""),
-                    u_inv.get("vendor", ""),
-                    u_inv.get("date", ""),
+                    _safe_cell_text(u_inv.get("invoice_number", "")),
+                    _safe_cell_text(u_inv.get("vendor", "")),
+                    _safe_cell_text(u_inv.get("date", "")),
                     float(u_inv.get("total", 0.0)),
                     0.0,
                     f"=ROUND(E{r_idx}-F{r_idx},2)",
@@ -213,9 +219,9 @@ def _build_xlsx_bytes(
             ws_recon.append(
                 [
                     "Duplicate Charge" if "DUPLICATE" in raw_status else "Missing Receipt",
-                    u_bnk.get("txn_id", ""),
-                    u_bnk.get("description", ""),
-                    u_bnk.get("date", ""),
+                    _safe_cell_text(u_bnk.get("txn_id", "")),
+                    _safe_cell_text(u_bnk.get("description", "")),
+                    _safe_cell_text(u_bnk.get("date", "")),
                     0.0,
                     float(u_bnk.get("amount", 0.0)),
                     f"=ROUND(E{r_idx}-F{r_idx},2)",
@@ -251,10 +257,10 @@ def _build_csv_bytes(
     if quickbooks_mode:
         writer.writerow(["Date", "Description", "Amount", "Account", "Vendor", "RefNumber", "Memo", "MathVerified", "Audit_Memo"])
         for doc in documents:
-            vendor = doc.get("vendor", "Unknown Supplier")
-            inv_no = doc.get("invoice_number", "INV-UNKNOWN")
-            dt = doc.get("issue_date", "2026-10-01")
-            category = doc.get("suggested_category", "General Operating Expense")
+            vendor = _safe_cell_text(doc.get("vendor", "Unknown Supplier"))
+            inv_no = _safe_cell_text(doc.get("invoice_number", "INV-UNKNOWN"))
+            dt = _safe_cell_text(doc.get("issue_date", "2026-10-01"))
+            category = _safe_cell_text(doc.get("suggested_category", "General Operating Expense"))
             verified = "TRUE" if doc.get("math_verified", False) else "FALSE"
             audit_memo = _build_audit_memo(doc, use_corrected_amounts)
             for item in doc.get("line_items", []):
@@ -262,7 +268,7 @@ def _build_csv_bytes(
                 writer.writerow(
                     [
                         dt,
-                        item.get("description", "Line Item"),
+                        _safe_cell_text(item.get("description", "Line Item")),
                         f"{float(amt):.2f}",
                         category,
                         vendor,
@@ -292,14 +298,14 @@ def _build_csv_bytes(
             for item in doc.get("line_items", []):
                 writer.writerow(
                     [
-                        doc.get("invoice_number", "INV-UNKNOWN"),
-                        doc.get("vendor", "Unknown Supplier"),
-                        doc.get("issue_date", "2026-10-01"),
-                        doc.get("due_date") or "",
-                        doc.get("currency", "USD"),
-                        doc.get("suggested_category", "General Operating Expense"),
+                        _safe_cell_text(doc.get("invoice_number", "INV-UNKNOWN")),
+                        _safe_cell_text(doc.get("vendor", "Unknown Supplier")),
+                        _safe_cell_text(doc.get("issue_date", "2026-10-01")),
+                        _safe_cell_text(doc.get("due_date") or ""),
+                        _safe_cell_text(doc.get("currency", "USD")),
+                        _safe_cell_text(doc.get("suggested_category", "General Operating Expense")),
                         item.get("line_number", 1),
-                        item.get("description", ""),
+                        _safe_cell_text(item.get("description", "")),
                         item.get("quantity", 1),
                         item.get("unit_price", 0.0),
                         item.get("amount", 0.0),
