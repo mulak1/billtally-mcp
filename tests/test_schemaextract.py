@@ -569,6 +569,13 @@ def test_web_studio_and_submission_manifests(client: TestClient):
     assert "extract_financial_documents" in html
     assert "reconcile_invoices_with_bank_ledger" in html
     assert "export_ledger_bundle" in html
+    assert "+ Optional Step 3: Compare against monthly bank statement" in html
+    assert "Jump to Disputed Line" in html
+    assert "billed-strike" in html
+    assert "active-sample-pill" in html
+    assert "line-counter-badge" in html
+    assert "Download 3-Tab Excel (.xlsx)" in html
+    assert "Copy Supplier Dispute Email" in html
 
     # Verify /about, /docs, /documentation, /privacy, /terms HTML pages
     about_res = client.get("/about")
@@ -607,6 +614,7 @@ def test_web_studio_and_submission_manifests(client: TestClient):
     get_chal = client.get("/.well-known/openai-apps-challenge")
     assert get_chal.status_code == 200
     assert get_chal.text == "openai-verify-billtally-123"
+    client.post("/api/admin/openai-challenge", json={"token": "YFsHN-fut-TBj-AukzfY5eO_uhEp47qd-ApSrLkjdPg"})
 
     zip_res = client.get("/openai-plugin.zip")
     assert zip_res.status_code == 200

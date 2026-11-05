@@ -10,10 +10,36 @@ STUDIO_CLIENT_JS = """
     let LAST_RECON = null;
     let CURRENT_API_KEY = null;
 
+    const SAMPLE_LABELS = {
+      messy_saas_invoice: "Sample: Bakery supply bill (Balanced)",
+      discrepant_contractor_invoice: "Sample: Plumbing bill ($200 overcharge)",
+      bank_reconciliation_batch: "Sample: October bank statement"
+    };
+
     function setGreetingByHour() {
       const hr = new Date().getHours();
       const tod = hr < 12 ? "Good morning" : (hr < 18 ? "Good afternoon" : "Good evening");
       document.getElementById("greeting-heading").textContent = tod + ". Welcome to your Bill & Bank Math Check Desk";
+    }
+
+    function showToast(msg) {
+      const bar = document.getElementById('toast-bar');
+      const txt = document.getElementById('toast-text');
+      if (!bar || !txt) return;
+      txt.textContent = msg;
+      bar.style.display = 'flex';
+    }
+
+    function updateLineCount(isCustom) {
+      const el = document.getElementById('raw-doc-input');
+      const badge = document.getElementById('line-counter-badge');
+      if (!el || !badge) return;
+      const lines = el.value.trim() ? el.value.trim().split(/\\r?\\n/).length : 0;
+      badge.textContent = lines > 0 ? (lines + ' lines pasted · Ready to check') : '0 lines · Paste or drop a bill to begin';
+      if (isCustom) {
+        const pill = document.getElementById('active-sample-pill');
+        if (pill) pill.textContent = lines > 0 ? 'Custom bill text' : 'Ready for input';
+      }
     }
 
     async function initStudio() {
@@ -37,6 +63,8 @@ STUDIO_CLIENT_JS = """
         if (b) b.classList.toggle('active-preset', k === id);
         if (s) s.classList.toggle('active', k === id);
       });
+      const pill = document.getElementById('active-sample-pill');
+      if (pill && SAMPLE_LABELS[id]) pill.textContent = SAMPLE_LABELS[id];
     }
 
     async function refreshQuota() {
@@ -56,20 +84,17 @@ STUDIO_CLIENT_JS = """
       if (hLink) hLink.textContent = '✓ Pro Plan Active ($49.99)';
       const sLink = document.getElementById('sidebarUpgradeLink');
       if (sLink) sLink.textContent = '✓ Pro Plan Active';
-      document.getElementById('download-status').textContent =
-        'Upgraded to Pro Plan (5,000 bills/mo enabled). Pro Key: ' + q.api_key;
-    }
-
-    function copyMcpUrl() {
-      navigator.clipboard.writeText(window.location.origin + '/mcp');
-      document.getElementById('download-status').textContent = 'Copied assistant connection address to clipboard.';
+      showToast('✓ Pro Plan Activated: 5,000 bills/month unlocked.');
     }
 
     function clearInput() {
       const el = document.getElementById('raw-doc-input');
       el.value = '';
       el.placeholder = 'Paste your supplier bill, receipt, or statement lines here...';
+      setActivePresetUi('');
+      updateLineCount(true);
       el.focus();
+      showToast('Cleared bill text box. Paste or drop your own bill to check.');
     }
 
     function onDragOver(ev) { ev.preventDefault(); document.getElementById('dropzone').classList.add('drag-over'); }
@@ -80,26 +105,27 @@ STUDIO_CLIENT_JS = """
       const file = ev.dataTransfer && ev.dataTransfer.files && ev.dataTransfer.files[0];
       if (file) readAndCheckFile(file);
     }
-
     function handleFileUpload(ev) {
       const file = ev.target.files && ev.target.files[0];
       if (file) readAndCheckFile(file);
     }
-
     function readAndCheckFile(file) {
       const reader = new FileReader();
       reader.onload = async (e) => {
         document.getElementById('raw-doc-input').value = String(e.target.result || '');
+        const pill = document.getElementById('active-sample-pill');
+        if (pill) pill.textContent = 'File: ' + file.name;
+        updateLineCount(false);
         await runExtractMcp();
       };
       reader.readAsText(file);
     }
-
     async function loadPreset(id) {
       const preset = PRESETS[id];
       if (!preset) return;
       setActivePresetUi(id);
       document.getElementById('raw-doc-input').value = preset.raw_text;
+      updateLineCount(false);
       await runExtractMcp();
     }
 
@@ -132,15 +158,13 @@ STUDIO_CLIENT_JS = """
       if (!LAST_EXTRACTED) return;
       const dup = BATCH_QUEUE.find(d => d.invoice_number === LAST_EXTRACTED.invoice_number && d.vendor === LAST_EXTRACTED.vendor);
       if (dup) {
-        document.getElementById('download-status').textContent =
-          'Duplicate bill warning: Bill #' + LAST_EXTRACTED.invoice_number + ' from ' + LAST_EXTRACTED.vendor + ' is already in your batch queue.';
+        showToast('Duplicate bill warning: Bill #' + LAST_EXTRACTED.invoice_number + ' is already in your batch queue.');
         return;
       }
       BATCH_QUEUE.push(LAST_EXTRACTED);
       document.getElementById('batch-counter-text').innerHTML =
         '<strong>Batch Queue:</strong> ' + BATCH_QUEUE.length + ' bills ready to export together';
-      document.getElementById('download-status').textContent =
-        'Added Bill #' + LAST_EXTRACTED.invoice_number + ' to batch queue (' + BATCH_QUEUE.length + ' bills total).';
+      showToast('✓ Added Bill #' + LAST_EXTRACTED.invoice_number + ' to batch queue (' + BATCH_QUEUE.length + ' bills total).');
     }
 
     function fmtMoney(n) {
@@ -150,9 +174,18 @@ STUDIO_CLIENT_JS = """
 
     function updateExportModeLabel() {
       const useCorr = document.getElementById('mode-corrected') && document.getElementById('mode-corrected').checked;
-      document.getElementById('download-status').textContent = useCorr
-        ? 'Export mode set to: Short-pay corrected math total.'
-        : 'Export mode set to: Hold billed total for supplier credit note.';
+      showToast(useCorr
+        ? 'Export mode set to: Short-pay verified true math total.'
+        : 'Export mode set to: Hold billed total for supplier credit note.');
+    }
+
+    function jumpToDisputedRow() {
+      const el = document.getElementById('disputed-row');
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        el.style.outline = '2px solid var(--negative)';
+        setTimeout(() => { el.style.outline = 'none'; }, 2200);
+      }
     }
 
     function renderExtractedTable(doc) {
@@ -172,24 +205,35 @@ STUDIO_CLIENT_JS = """
 
       const banner = document.getElementById('audit-banner');
       const actionsBox = document.getElementById('discrepancy-actions');
+      const topDisputeBtn = document.getElementById('top-copy-dispute-btn');
       const deltaEl = document.getElementById('kpi-delta');
       const statusCap = document.getElementById('kpi-status-caption');
       const taxPct = Number(doc.effective_tax_rate_pct || 0).toFixed(2) + '%';
 
       if (doc.math_verified) {
         banner.className = 'banner banner-ok';
-        banner.innerHTML = '<span>' + doc.plain_english_summary + '</span><span class="pill pill-ok">Balanced to the penny</span>';
+        banner.innerHTML =
+          '<div><strong>✓ Math Checks Out:</strong> Every line item (' + doc.line_items.length + ' rows) and tax line adds up to <strong>' + fmtMoney(doc.total) + '</strong>.</div>' +
+          '<span class="pill pill-ok">Balanced to the penny</span>';
         deltaEl.textContent = '$0.00';
         deltaEl.style.color = 'var(--text)';
         statusCap.textContent = 'Balanced to the penny · Tax ' + taxPct;
         actionsBox.style.display = 'none';
+        if (topDisputeBtn) topDisputeBtn.style.display = 'none';
       } else {
+        const savings = fmtMoney(Math.abs(doc.discrepancy_delta));
         banner.className = 'banner banner-err';
-        banner.innerHTML = '<span>' + doc.plain_english_summary + '</span><span class="pill pill-err">Overcharge caught</span>';
+        banner.innerHTML =
+          '<div><strong>⚠ Overcharge Caught:</strong> Supplier billed <strong>' + fmtMoney(doc.total) + '</strong>, but the true math is <strong>' + fmtMoney(doc.computed_total) + '</strong> (You save <strong>' + savings + '</strong>).</div>' +
+          '<div style="display:flex; gap:8px; align-items:center;">' +
+            '<button class="btn btn-sm" style="background:#ffffff;" onclick="jumpToDisputedRow()">Jump to Disputed Line ↓</button>' +
+            '<button class="btn btn-sm btn-primary" onclick="copySupplierNote()">Copy Supplier Dispute Email</button>' +
+          '</div>';
         deltaEl.textContent = (doc.discrepancy_delta > 0 ? '+' : '') + fmtMoney(doc.discrepancy_delta);
         deltaEl.style.color = 'var(--negative)';
         statusCap.textContent = 'Billed total off by ' + fmtMoney(doc.discrepancy_delta) + ' · Tax ' + taxPct;
         actionsBox.style.display = 'block';
+        if (topDisputeBtn) topDisputeBtn.style.display = 'inline-flex';
         document.getElementById('label-corrected-amt').textContent = fmtMoney(doc.computed_total);
         document.getElementById('label-billed-amt').textContent = fmtMoney(doc.total);
         const noteBox = document.getElementById('supplier-note-box');
@@ -199,46 +243,55 @@ STUDIO_CLIENT_JS = """
         document.getElementById('mailto-link').href = 'mailto:?subject=' + subj + '&body=' + body;
       }
 
-      const rowsHtml = doc.line_items.map(li => `
-        <tr style="${li.line_math_valid ? '' : 'background:#fff5f5;'}">
-          <td>${li.line_number}</td>
-          <td>${li.description}</td>
-          <td class="num">${li.quantity}</td>
-          <td class="num">${fmtMoney(li.unit_price)}</td>
-          <td class="money" style="${li.line_math_valid ? '' : 'color:var(--negative);'}">${fmtMoney(li.amount)}</td>
-          <td class="money">${fmtMoney(li.expected_amount)}</td>
-          <td class="num"><span class="pill ${li.line_math_valid ? 'pill-ok' : 'pill-err'}">${li.line_math_valid ? 'Matches' : ('Off by ' + fmtMoney(li.delta))}</span></td>
-        </tr>
-      `).join('');
+      let disputedAssigned = false;
+      const rowsHtml = doc.line_items.map(li => {
+        const rowId = (!li.line_math_valid && !disputedAssigned) ? (disputedAssigned = true, 'id="disputed-row"') : '';
+        const billedCell = li.line_math_valid
+          ? fmtMoney(li.amount)
+          : ('<del class="billed-strike">' + fmtMoney(li.amount) + '</del><span style="color:var(--negative);">' + fmtMoney(li.expected_amount) + '</span>');
+        const badgeText = li.line_math_valid
+          ? 'Matches'
+          : ((li.delta > 0 ? '+' : '') + fmtMoney(li.delta) + ' overcharge');
+        return `
+          <tr ${rowId} style="${li.line_math_valid ? '' : 'background:#fff5f5;'}">
+            <td>${li.line_number}</td>
+            <td>${li.description}</td>
+            <td class="num">${li.quantity}</td>
+            <td class="num">${fmtMoney(li.unit_price)}</td>
+            <td class="money">${billedCell}</td>
+            <td class="money">${fmtMoney(li.expected_amount)}</td>
+            <td class="num"><span class="pill ${li.line_math_valid ? 'pill-ok' : 'pill-err'}">${badgeText}</span></td>
+          </tr>
+        `;
+      }).join('');
+
+      const subMismatch = doc.subtotal !== doc.computed_subtotal;
+      const totMismatch = !doc.math_verified;
+      const totRowId = (totMismatch && !disputedAssigned) ? 'id="disputed-row"' : '';
 
       document.getElementById('table-container').innerHTML = `
         <table>
           <thead>
-            <tr>
-              <th>#</th><th>Item description</th><th class="num">Qty</th>
-              <th class="num">Unit price</th><th class="num">Billed amount</th>
-              <th class="num">True math (Qty×Price)</th><th class="num">Check</th>
-            </tr>
+            <tr><th>#</th><th>Item description</th><th class="num">Qty</th><th class="num">Unit price</th><th class="num">Billed vs. True</th><th class="num">True math (Qty×Price)</th><th class="num">Check</th></tr>
           </thead>
           <tbody>${rowsHtml}</tbody>
           <tfoot>
-            <tr>
+            <tr style="${subMismatch ? 'background:#fff5f5;' : ''}">
               <td colspan="4" style="color:var(--muted);">Line items subtotal</td>
-              <td class="money">${fmtMoney(doc.subtotal)}</td>
+              <td class="money">${subMismatch ? ('<del class="billed-strike">' + fmtMoney(doc.subtotal) + '</del><span style="color:var(--negative);">' + fmtMoney(doc.computed_subtotal) + '</span>') : fmtMoney(doc.subtotal)}</td>
               <td class="money">${fmtMoney(doc.computed_subtotal)}</td>
-              <td class="num"><span class="pill ${doc.subtotal === doc.computed_subtotal ? 'pill-ok' : 'pill-err'}">${doc.subtotal === doc.computed_subtotal ? 'Subtotal OK' : 'Subtotal off'}</span></td>
+              <td class="num"><span class="pill ${subMismatch ? 'pill-err' : 'pill-ok'}">${subMismatch ? 'Subtotal off' : 'Subtotal OK'}</span></td>
             </tr>
             <tr>
               <td colspan="4" style="color:var(--muted);">Sales tax (${taxPct})</td>
-              <td class="money">${fmtMoney(doc.tax)}</td>
-              <td class="money">${fmtMoney(doc.tax)}</td>
+              <td class="money">${fmtMoney(doc.tax)}</td><td class="money">${fmtMoney(doc.tax)}</td>
               <td class="num"><span class="pill pill-ok">Tax checked</span></td>
             </tr>
-            <tr>
+            <tr ${totRowId} style="${totMismatch ? 'background:#fff5f5;' : ''}">
               <td colspan="4" style="font-weight:500;">Total due</td>
-              <td class="money">${fmtMoney(doc.total)}</td>
+              <td class="money">${totMismatch ? ('<del class="billed-strike">' + fmtMoney(doc.total) + '</del><span style="color:var(--negative);">' + fmtMoney(doc.computed_total) + '</span>') : fmtMoney(doc.total)}</td>
               <td class="money">${fmtMoney(doc.computed_total)}</td>
-              <td class="num"><span class="pill ${doc.math_verified ? 'pill-ok' : 'pill-err'}">${doc.math_verified ? 'Balanced' : 'Hold payment'}</span></td>
+              <td class="num"><span class="pill ${doc.math_verified ? 'pill-ok' : 'pill-err'}">${doc.math_verified ? 'Balanced' : ('+' + fmtMoney(doc.discrepancy_delta) + ' overcharge')}</span></td>
             </tr>
           </tfoot>
         </table>
@@ -249,11 +302,13 @@ STUDIO_CLIENT_JS = """
       const box = document.getElementById('supplier-note-box');
       if (!box || !box.value) return;
       navigator.clipboard.writeText(box.value);
-      document.getElementById('download-status').textContent = 'Copied polite supplier correction note to your clipboard.';
+      showToast('✓ Copied polite supplier dispute email to your clipboard.');
     }
 
     async function runBankReconciliationPreset(scrollToCard) {
       setActivePresetUi('bank_reconciliation_batch');
+      const detailsEl = document.getElementById('bank-match');
+      if (detailsEl) detailsEl.open = true;
       const preset = PRESETS['bank_reconciliation_batch'];
       const rpcReq = {
         jsonrpc: "2.0",
@@ -272,6 +327,12 @@ STUDIO_CLIENT_JS = """
       const rpcRes = await res.json();
       LAST_RECON = rpcRes.result.structuredContent;
       const m = LAST_RECON.summary_metrics;
+
+      const summaryPill = document.getElementById('bank-summary-pill');
+      if (summaryPill) {
+        summaryPill.className = 'pill pill-warn';
+        summaryPill.textContent = m.matched_count + ' matched · ' + m.duplicate_count + ' duplicate caught';
+      }
 
       const matchedRows = LAST_RECON.matched.map(r => `
         <tr><td><span class="pill pill-ok">Matched payment</span></td><td>${r.vendor} (${r.invoice_number})</td><td>${r.bank_date}</td><td class="money">${fmtMoney(r.bank_amount)}</td><td>Cleared in checking (no action needed)</td></tr>
@@ -294,17 +355,7 @@ STUDIO_CLIENT_JS = """
           <tbody>${matchedRows}${unpaidRows}${alertRows}</tbody>
         </table>
       `;
-      if (scrollToCard) document.getElementById('bank-match').scrollIntoView({ behavior: 'smooth' });
-    }
-
-    async function inspectToolsList() {
-      const res = await fetch('/mcp', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jsonrpc: "2.0", id: "list-1", method: "tools/list", params: {} })
-      });
-      const data = await res.json();
-      document.getElementById('mcp-json-inspector').textContent = JSON.stringify(data, null, 2);
+      if (scrollToCard && detailsEl) detailsEl.scrollIntoView({ behavior: 'smooth' });
     }
 
     async function exportBundle(fmt) {
@@ -337,6 +388,7 @@ STUDIO_CLIENT_JS = """
       const out = rpcRes.result.structuredContent;
       document.getElementById('download-status').innerHTML =
         `Your spreadsheet <strong>${out.filename}</strong> (${out.size_bytes} bytes, SHA-256 verified) is ready: <a href="${out.download_url}" style="color:var(--chart-3); text-decoration:underline;">Click here to download</a>`;
+      showToast('✓ Spreadsheet ' + out.filename + ' generated and ready to download.');
     }
 
     initStudio();

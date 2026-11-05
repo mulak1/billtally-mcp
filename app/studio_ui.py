@@ -45,13 +45,13 @@ def render_studio_html() -> str:
     .nav-item { display: flex; align-items: center; height: 32px; padding: 0 10px; border-radius: 6px; color: var(--text); text-decoration: none; font-size: 13.5px; margin-bottom: 2px; cursor: pointer; }
     .nav-item.active { background: #e9e9e9; font-weight: 500; }
     .canvas { padding: 32px 36px 64px; max-width: 1240px; }
-    .greeting-bar { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 16px; }
+    .greeting-bar { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }
     h1 { font-size: 24px; font-weight: 500; letter-spacing: -0.02em; color: var(--text); }
     .greeting-sub { color: var(--muted); font-size: 14px; margin-top: 4px; max-width: 720px; }
     .trust-strip { display: flex; flex-wrap: wrap; gap: 16px; font-size: 12px; color: var(--muted); margin-bottom: 14px; padding: 8px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-control); }
     .steps-strip { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 16px; }
     .step-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-card); padding: 12px 16px; font-size: 13px; }
-    .step-num { font-family: var(--mono); font-size: 11px; color: var(--muted); display: block; margin-bottom: 2px; }
+    .step-num { font-family: var(--mono); font-size: 11px; color: var(--muted); display: block; margin-bottom: 2px; font-weight: 500; }
     .kpi-strip { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-card); display: grid; grid-template-columns: repeat(4, 1fr); margin-bottom: 16px; }
     .kpi-cell { padding: 16px 20px; border-right: 1px solid var(--border); }
     .kpi-cell:last-child { border-right: none; }
@@ -65,26 +65,33 @@ def render_studio_html() -> str:
     .btn-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
     .btn { height: 36px; padding: 0 13px; border-radius: var(--radius-control); border: 1px solid var(--control); background: var(--raised); color: var(--text); font-family: var(--sans); font-size: 13px; font-weight: 500; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; text-decoration: none; }
     .btn:hover { background: #e2e2e2; }
-    .btn.active-preset { border-color: var(--text); background: #e0e0e0; }
+    .btn-sm { height: 28px; padding: 0 10px; font-size: 12px; }
+    .btn.active-preset { border-color: var(--text); background: var(--text); color: #ffffff; }
     .btn-primary { background: var(--accent); color: #ffffff; border-color: var(--accent); }
     .btn-primary:hover { background: #2b2b2b; }
     .dropzone { border: 1px dashed var(--control); border-radius: var(--radius-control); padding: 10px 12px; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: var(--muted); background: #fcfcfc; }
     .dropzone.drag-over { border-color: var(--chart-3); background: #f0f6ff; }
+    .input-meta-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; font-size: 12px; color: var(--muted); }
     textarea { width: 100%; min-height: 220px; border: 1px solid var(--border); border-radius: var(--radius-control); padding: 12px; font-family: var(--mono); font-size: 12px; color: var(--text); background: #fcfcfc; resize: vertical; margin-bottom: 12px; line-height: 1.55; }
-    .banner { padding: 12px 14px; border-radius: var(--radius-control); font-size: 13px; margin-bottom: 14px; display: flex; justify-content: space-between; align-items: center; gap: 12px; }
-    .banner-ok { background: var(--pill-positive-bg); color: var(--pill-positive-ink); }
-    .banner-err { background: var(--pill-negative-bg); color: var(--pill-negative-ink); }
-    .banner-warn { background: var(--pill-warning-bg); color: var(--pill-warning-ink); }
+    .banner { padding: 14px 16px; border-radius: var(--radius-control); font-size: 13.5px; margin-bottom: 14px; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .banner-ok { background: var(--pill-positive-bg); color: var(--pill-positive-ink); border: 1px solid #b7ebc6; }
+    .banner-err { background: var(--pill-negative-bg); color: var(--pill-negative-ink); border: 1px solid #f5c2c7; }
+    .banner-warn { background: var(--pill-warning-bg); color: var(--pill-warning-ink); border: 1px solid #fde68a; }
     .pill { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 500; }
     .pill-ok { background: var(--pill-positive-bg); color: var(--pill-positive-ink); }
     .pill-err { background: var(--pill-negative-bg); color: var(--pill-negative-ink); }
     .pill-warn { background: var(--pill-warning-bg); color: var(--pill-warning-ink); }
+    .pill-neutral { background: var(--pill-neutral-bg); color: var(--pill-neutral-ink); }
     table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
     th, td { height: 42px; padding: 6px 10px; border-bottom: 1px solid var(--rule); text-align: left; }
     th { font-size: 12px; font-weight: 500; color: var(--muted); border-bottom: 1px solid var(--border); }
     th.num, td.num { text-align: right; }
     td.money { font-weight: 700; text-align: right; }
+    del.billed-strike { color: var(--muted); font-weight: 400; margin-right: 6px; text-decoration: line-through; }
     select.input-select { height: 34px; width: 100%; border: 1px solid var(--control); border-radius: var(--radius-control); padding: 0 8px; font-family: var(--sans); font-size: 13px; background: var(--surface); color: var(--text); }
+    details.collapsible-card > summary { list-style: none; cursor: pointer; display: flex; justify-content: space-between; align-items: center; font-weight: 500; font-size: 15px; }
+    details.collapsible-card > summary::-webkit-details-marker { display: none; }
+    .toast-bar { display: none; padding: 10px 14px; border-radius: var(--radius-control); background: #141414; color: #ffffff; font-size: 13px; font-weight: 500; margin-bottom: 14px; align-items: center; justify-content: space-between; gap: 12px; }
     .top-bar-links { display: flex; justify-content: flex-end; gap: 18px; padding-bottom: 14px; margin-bottom: 18px; border-bottom: 1px solid var(--border); font-size: 13px; }
     .top-bar-links a { color: var(--muted); text-decoration: none; font-weight: 500; }
     .top-bar-links a:hover { color: var(--text); text-decoration: underline; }
@@ -169,9 +176,10 @@ def render_studio_html() -> str:
             (Quantity × Unit Price) and sales tax to the penny before you pay the bill or export your spreadsheet.
           </p>
         </div>
-        <div class="btn-row" id="export-bar">
-          <button class="btn btn-primary" onclick="exportBundle('xlsx')">Download Excel (.xlsx with =SUM)</button>
-          <button class="btn" onclick="exportBundle('quickbooks_csv')">Download Accounting CSV</button>
+        <div class="btn-row" id="export-bar" style="margin-bottom:0;">
+          <button class="btn btn-primary" onclick="exportBundle('xlsx')">Download 3-Tab Excel (.xlsx)</button>
+          <button class="btn" onclick="exportBundle('quickbooks_csv')">Download QuickBooks (.csv)</button>
+          <button class="btn" id="top-copy-dispute-btn" style="display:none;" onclick="copySupplierNote()">Copy Supplier Dispute Email</button>
         </div>
       </header>
 
@@ -185,16 +193,16 @@ def render_studio_html() -> str:
 
       <section class="steps-strip" aria-label="How this works in 3 plain steps">
         <div class="step-card">
-          <span class="step-num">Step 1 of 3 · Add your bill</span>
-          Pick one of the sample bills below, drag and drop a <code>.txt</code> or <code>.csv</code> file, or paste text from an email or PDF.
+          <span class="step-num">1. Add or pick a bill</span>
+          Click a sample bill below, drop a <code>.txt</code> or <code>.csv</code> file, or paste lines from a PDF or email.
         </div>
         <div class="step-card">
-          <span class="step-num">Step 2 of 3 · Automatic penny check</span>
-          Every line item is multiplied out and added up so overcharges and duplicate bank withdrawals are caught immediately.
+          <span class="step-num">2. Instant penny verdict</span>
+          Every line item (Qty × Price) and sales tax line is verified to catch overcharges before you pay.
         </div>
         <div class="step-card">
-          <span class="step-num">Step 3 of 3 · Export or reply</span>
-          Download a clean 3-tab Excel workbook with live <code>=SUM()</code> formulas, or copy a polite correction note to your supplier.
+          <span class="step-num">3. Export or dispute in 1 click</span>
+          Download a 3-tab Excel (<code>.xlsx</code>) with live <code>=SUM()</code> formulas or copy a polite supplier dispute email.
         </div>
       </section>
 
@@ -229,44 +237,53 @@ def render_studio_html() -> str:
         </div>
       </section>
 
+      <div id="toast-bar" class="toast-bar" role="status" aria-live="polite">
+        <span id="toast-text"></span>
+        <button class="btn btn-sm" onclick="document.getElementById('toast-bar').style.display='none'">Dismiss</button>
+      </div>
       <div id="download-status" style="margin-bottom:12px; font-size:13px; color:var(--chart-3); font-weight:500;"></div>
 
       <section class="workbench">
         <div class="card">
-          <div class="card-title">Step 1 · Bill or statement text</div>
-          <div class="card-sub">Try a sample small-business bill with one click, drop a file from your computer, or paste your own text.</div>
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+            <div class="card-title" style="margin-bottom:0;">Step 1 · Bill or statement text</div>
+            <span class="pill pill-neutral" id="active-sample-pill">Sample: Bakery supply bill</span>
+          </div>
+          <div class="card-sub">Try a sample small-business bill with one click, drop a file, or paste your own text.</div>
 
           <div class="btn-row">
-            <button class="btn active-preset" id="btn-messy_saas_invoice" onclick="loadPreset('messy_saas_invoice')">Bakery supply bill ($6,928)</button>
-            <button class="btn" id="btn-discrepant_contractor_invoice" onclick="loadPreset('discrepant_contractor_invoice')">Plumbing bill ($200 math error)</button>
-            <button class="btn" id="btn-bank_reconciliation_batch" onclick="runBankReconciliationPreset(true)">October bank statement match</button>
+            <button class="btn active-preset" id="btn-messy_saas_invoice" onclick="loadPreset('messy_saas_invoice')">Bakery bill (Balanced)</button>
+            <button class="btn" id="btn-discrepant_contractor_invoice" onclick="loadPreset('discrepant_contractor_invoice')">Plumbing bill ($200 overcharge)</button>
+            <button class="btn" id="btn-bank_reconciliation_batch" onclick="runBankReconciliationPreset(true)">+ October bank statement</button>
           </div>
 
           <div class="dropzone" id="dropzone" ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onFileDrop(event)">
             <span>Drag & drop a <code>.txt</code> or <code>.csv</code> file here, or choose from computer</span>
-            <label class="btn" style="height:28px; font-size:12px; cursor:pointer;">
+            <label class="btn btn-sm" style="cursor:pointer;">
               Choose file (.txt / .csv)
               <input type="file" id="file-upload" accept=".txt,.csv" style="display:none" onchange="handleFileUpload(event)" />
             </label>
           </div>
 
-          <label for="raw-doc-input" style="font-size:12px; color:var(--muted); display:block; margin-bottom:4px;">Bill or statement lines</label>
-          <textarea id="raw-doc-input" spellcheck="false"></textarea>
+          <div class="input-meta-bar">
+            <label for="raw-doc-input">Bill or statement lines (<span id="line-counter-badge">14 lines pasted · Ready to check</span>)</label>
+            <button class="btn btn-sm" onclick="clearInput()">Clear text</button>
+          </div>
+          <textarea id="raw-doc-input" spellcheck="false" oninput="updateLineCount()"></textarea>
 
           <div class="btn-row" style="margin-bottom:0;">
             <button class="btn btn-primary" onclick="runExtractMcp()">Check bill math to the penny</button>
-            <button class="btn" onclick="addCurrentToBatch()">Add bill to batch queue</button>
-            <button class="btn" onclick="clearInput()">Clear & paste your own</button>
+            <button class="btn" onclick="addCurrentToBatch()">+ Add to batch queue</button>
           </div>
         </div>
 
         <div>
           <div class="card">
-            <div class="card-title">Step 2 · Line-by-line penny check</div>
+            <div class="card-title">Step 2 · Bottom-line verdict &amp; line-item check</div>
             <div class="card-sub">Every row is checked by multiplying Quantity × Unit Price and comparing against the billed amount.</div>
 
             <div id="audit-banner" class="banner banner-ok">
-              <span id="banner-text">All 5 line items and tax add up to the penny ($6,928.00). Ready to approve and export.</span>
+              <span id="banner-text">✓ Math Checks Out: All 5 line items and tax add up to $6,928.00.</span>
               <span class="pill pill-ok" id="confidence-pill">Verified</span>
             </div>
 
@@ -287,9 +304,9 @@ def render_studio_html() -> str:
               <label for="supplier-note-box" style="font-size:12px; color:var(--muted); display:block; margin-bottom:4px;">
                 Polite note to supplier (you can edit before copying or emailing):
               </label>
-              <textarea id="supplier-note-box" style="min-height:110px; background:#ffffff; margin-bottom:8px;"></textarea>
+              <textarea id="supplier-note-box" style="min-height:100px; background:#ffffff; margin-bottom:8px;"></textarea>
               <div class="btn-row" style="margin-bottom:0;">
-                <button class="btn btn-primary" onclick="copySupplierNote()">Copy note to supplier</button>
+                <button class="btn btn-primary" onclick="copySupplierNote()">Copy Supplier Dispute Email</button>
                 <a class="btn" id="mailto-link" href="mailto:billing@supplier.example">Open in email app</a>
               </div>
             </div>
@@ -297,23 +314,26 @@ def render_studio_html() -> str:
             <div id="table-container"></div>
           </div>
 
-          <div class="card" id="bank-match">
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-              <div>
-                <div class="card-title">Monthly bank statement vs. supplier bills</div>
-                <div class="card-sub" style="margin-bottom:0;">Matches your bills against checking withdrawals to catch unpaid bills and duplicate charges.</div>
+          <details class="card collapsible-card" id="bank-match">
+            <summary>
+              <span>+ Optional Step 3: Compare against monthly bank statement</span>
+              <span class="pill pill-neutral" id="bank-summary-pill">Click to expand</span>
+            </summary>
+            <div style="margin-top:12px; padding-top:12px; border-top:1px solid var(--border);">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                <div class="card-sub" style="margin-bottom:0;">Matches your supplier bills against checking withdrawals to catch unpaid bills and duplicate charges.</div>
+                <button class="btn btn-sm" onclick="runBankReconciliationPreset(false)">Run October bank check</button>
               </div>
-              <button class="btn" onclick="runBankReconciliationPreset(false)">Run October bank check</button>
+              <div id="bank-recon-container" style="font-size:13px; color:var(--muted);">
+                Click "Run October bank check" to compare 4 supplier bills against 5 business checking withdrawals.
+              </div>
             </div>
-            <div id="bank-recon-container" style="font-size:13px; color:var(--muted);">
-              Click "Run October bank check" to compare 4 supplier bills against 5 business checking withdrawals.
-            </div>
-          </div>
+          </details>
         </div>
       </section>
 
       <footer class="site-footer">
-        <div>BillTally · Founder &amp; Creator: Kader Mula · Support: <a href="mailto:mulak1@gmail.com">mulak1@gmail.com</a></div>
+        <div>BillTally · Founder &amp; Creator: Kader Mula · Support: <a href="mailto:mulak1@gmail.com">mulak1@gmail.com</a> · Tools: <code>extract_financial_documents</code>, <code>reconcile_invoices_with_bank_ledger</code>, <code>export_ledger_bundle</code></div>
         <div style="display:flex; gap:16px;">
           <a href="/about">About</a>
           <a href="/docs">Documentation</a>

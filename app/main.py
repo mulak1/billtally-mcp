@@ -1,13 +1,4 @@
-"""
-SchemaExtract MCP — FastAPI Server Entrypoint (Port 8791).
-Exposes:
-- Streamable HTTP MCP Endpoint (`POST /mcp` & `GET /mcp`)
-- OAuth 2.1 with S256 PKCE (`/.well-known/oauth-authorization-server`, `/oauth/register`, `/oauth/authorize`, `/oauth/token`)
-- REST API equivalents (`/api/extract`, `/api/reconcile`, `/api/export`, `/api/presets`, `/api/quota`)
-- Download endpoint (`/downloads/{filename}`)
-- Claude & ChatGPT Store Manifests (`/manifests/claude`, `/manifests/openai`, `/privacy`, `/terms`)
-- Interactive Web Studio (`GET /`)
-"""
+"""BillTally (SchemaExtract MCP) — FastAPI Server Entrypoint (Port 8791)."""
 
 import json
 import os
@@ -19,31 +10,15 @@ from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 import uvicorn
 
-from app.analytics import (
-    build_chatgpt_openapi,
-    detect_source,
-    get_analytics_snapshot,
-    record_event,
-    render_analytics_html,
-)
+from app.analytics import build_chatgpt_openapi, detect_source, get_analytics_snapshot, record_event, render_analytics_html
 from app.exporter import DEFAULT_EXPORT_DIR, export_ledger_bundle, sanitize_export_filename
 from app.extractor import extract_financial_document
 from app.mcp_server import MCP_PROTOCOL_VERSION, MCP_TOOLS_CATALOG, handle_mcp_jsonrpc
-from app.models import (
-    ExportBundleRequest,
-    ExtractDocumentRequest,
-    ReconcileLedgerRequest,
-)
+from app.models import ExportBundleRequest, ExtractDocumentRequest, ReconcileLedgerRequest
 from app.oauth_quota import OAuth21Server, QuotaManager
 from app.presets import get_all_presets
 from app.reconciler import reconcile_invoices_with_bank_ledger
-from app.studio_pages import (
-    BILLTALLY_FAVICON_SVG,
-    render_about_html,
-    render_docs_html,
-    render_privacy_html,
-    render_terms_html,
-)
+from app.studio_pages import BILLTALLY_FAVICON_SVG, render_about_html, render_docs_html, render_privacy_html, render_terms_html
 from app.studio_ui import render_studio_html
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
