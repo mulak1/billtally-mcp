@@ -100,6 +100,9 @@ class ExtractedDocumentResult(BaseModel):
     plain_english_summary: str = ""
     suggested_category: str = "General Operating Expense"
     requires_1099_review: bool = False
+    duplicate_line_items_count: int = 0
+    duplicate_line_items_warning: Optional[str] = None
+    high_tax_rate_warning: Optional[str] = None
     vendor_dispute_note: Optional[str] = None
     quota_state: Optional[Dict[str, Any]] = None
 

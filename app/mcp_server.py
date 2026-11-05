@@ -275,6 +275,39 @@ def handle_mcp_jsonrpc(
     )
 
 
+def _coerce_tool_arguments(tool_name: Optional[str], arguments: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize common LLM argument aliases so cold store-review tool calls never fail validation."""
+    args = dict(arguments or {})
+    if tool_name == "extract_financial_documents":
+        if not args.get("raw_text"):
+            for alias in ("text", "invoice_text", "bill_text", "document_text", "content", "input"):
+                if args.get(alias):
+                    args["raw_text"] = str(args[alias])
+                    break
+    elif tool_name == "reconcile_invoices_with_bank_ledger":
+        if "invoices" not in args:
+            for alias in ("bills", "documents", "extracted_invoices"):
+                if alias in args:
+                    args["invoices"] = args[alias]
+                    break
+        if "bank_transactions" not in args:
+            for alias in ("transactions", "withdrawals", "bank_ledger", "statement_rows"):
+                if alias in args:
+                    args["bank_transactions"] = args[alias]
+                    break
+    elif tool_name == "export_ledger_bundle":
+        if "documents" not in args:
+            for alias in ("bills", "invoices", "extracted_documents"):
+                if alias in args:
+                    args["documents"] = args[alias]
+                    break
+            for single in ("document", "bill", "invoice"):
+                if single in args and isinstance(args[single], dict):
+                    args["documents"] = [args[single]]
+                    break
+    return args
+
+
 def _dispatch_tool_call(
     req_id: Any,
     tool_name: Optional[str],
@@ -284,6 +317,7 @@ def _dispatch_tool_call(
 ) -> Tuple[Dict[str, Any], int]:
     """Execute one of the 3 registered MCP tools and format the MCP `content` + `structuredContent` response."""
     try:
+        arguments = _coerce_tool_arguments(tool_name, arguments)
         if tool_name == "extract_financial_documents":
             req = ExtractDocumentRequest(**arguments)
             quota_state = quota_manager.consume_document(req.workspace_id, api_key=req.api_key)

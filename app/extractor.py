@@ -283,6 +283,25 @@ def extract_financial_document(
     eff_tax = float(round((tax / computed_subtotal) * Decimal("100"), 2)) if computed_subtotal > 0 else 0.0
     needs_1099 = ("Repairs" in category or "Services" in category) and float(computed_total) >= 600.0
 
+    seen_lines: Dict[Tuple[str, float], int] = {}
+    dup_labels: List[str] = []
+    for li in normalized_items:
+        sig = (li.description.strip().lower(), round(li.amount, 2))
+        seen_lines[sig] = seen_lines.get(sig, 0) + 1
+        if seen_lines[sig] == 2:
+            dup_labels.append(f"{li.description} (${li.amount:,.2f})")
+    dup_count = sum(c - 1 for c in seen_lines.values() if c > 1)
+    dup_warning = (
+        f"Potential duplicate line item: {', '.join(dup_labels)} appears more than once on this bill."
+        if dup_count > 0
+        else None
+    )
+    high_tax_warning = (
+        f"High effective tax rate ({eff_tax:.2f}% > 12%): verify local tax rate or non-taxable fees."
+        if eff_tax > 12.0
+        else None
+    )
+
     if math_verified:
         plain_summary = (
             f"All {len(normalized_items)} line items and tax add up to the penny "
@@ -355,6 +374,9 @@ def extract_financial_document(
         plain_english_summary=plain_summary,
         suggested_category=category,
         requires_1099_review=needs_1099,
+        duplicate_line_items_count=dup_count,
+        duplicate_line_items_warning=dup_warning,
+        high_tax_rate_warning=high_tax_warning,
         vendor_dispute_note=dispute_note,
         quota_state=quota_state,
     )

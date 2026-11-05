@@ -725,3 +725,48 @@ def test_rest_api_endpoints_and_mcp_batch_and_standard_csv(client: TestClient):
     assert batch_items[0]["result"] == {}
     assert "error" in batch_items[3]
 
+
+def test_p0_intelligence_upgrades_and_cold_call_coercion(client: TestClient, tmp_path: Path):
+    """Verifies P0 duplicate detector, >12% tax warning, Audit_Memo export, and LLM alias coercion."""
+    dup_and_high_tax_bill = (
+        "Vendor: Metro Restaurant Supply\nInvoice #: MRS-2026-991\nDate: 2026-10-15\n"
+        "1. Stainless Prep Table | Qty: 1 | Unit Price: $500.00 | Amount: $500.00\n"
+        "2. Stainless Prep Table | Qty: 1 | Unit Price: $500.00 | Amount: $500.00\n"
+        "Subtotal: $1,000.00\nTax: $150.00\nTotal: $1,150.00\n"
+    )
+    mcp_ext = client.post(
+        "/mcp",
+        json={"jsonrpc": "2.0", "id": 901, "method": "tools/call", "params": {"name": "extract_financial_documents", "arguments": {"invoice_text": dup_and_high_tax_bill}}},
+    )
+    assert mcp_ext.status_code == 200
+    ext_sc = mcp_ext.json()["result"]["structuredContent"]
+    assert ext_sc["duplicate_line_items_count"] == 1
+    assert "Potential duplicate line item" in (ext_sc["duplicate_line_items_warning"] or "")
+    assert ext_sc["effective_tax_rate_pct"] == 15.0
+    assert "High effective tax rate" in (ext_sc["high_tax_rate_warning"] or "")
+
+    preset = get_preset_by_id("bank_reconciliation_batch")
+    mcp_rec = client.post(
+        "/mcp",
+        json={"jsonrpc": "2.0", "id": 902, "method": "tools/call", "params": {"name": "reconcile_invoices_with_bank_ledger", "arguments": {"bills": preset["invoices"], "transactions": preset["bank_transactions"]}}},
+    )
+    assert mcp_rec.status_code == 200
+    assert mcp_rec.json()["result"]["isError"] is False
+
+    discrepant_doc = extract_financial_document(ExtractDocumentRequest(raw_text=get_preset_by_id("discrepant_contractor_invoice")["raw_text"])).model_dump()
+    mcp_exp = client.post(
+        "/mcp",
+        json={"jsonrpc": "2.0", "id": 903, "method": "tools/call", "params": {"name": "export_ledger_bundle", "arguments": {"document": discrepant_doc, "format": "quickbooks_csv", "use_corrected_amounts": True}}},
+    )
+    assert mcp_exp.status_code == 200
+    qb_csv = base64.b64decode(mcp_exp.json()["result"]["structuredContent"]["base64_content"]).decode("utf-8")
+    assert "Audit_Memo" in qb_csv
+    assert "Short-Pay Adjusted: Billed $6705.30 vs True Math $6505.30 (Saved $200.00 on disputed line items)" in qb_csv
+
+    studio_html = client.get("/").text
+    assert "copyVerifiedSummary()" in studio_html
+    assert "Check bill math to the penny (⌘↵)" in studio_html
+    assert "@media print" in studio_html
+    assert "not certified public accounting (CPA) or tax advice" in studio_html
+
+

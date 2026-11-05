@@ -104,6 +104,12 @@ def render_studio_html() -> str:
       .steps-strip, .kpi-strip, .workbench { grid-template-columns: 1fr; }
       .kpi-cell { border-right: none; border-bottom: 1px solid var(--border); }
     }
+    @media print {
+      .sidebar, .top-bar-links, .steps-strip, .dropzone, .btn-row, .toast-bar, #bank-match, #input-card { display: none !important; }
+      .shell, .workbench { display: block !important; }
+      .canvas { padding: 0 !important; max-width: 100% !important; }
+      body { background: #ffffff !important; }
+    }
   </style>
 </head>
 <body>
@@ -179,6 +185,7 @@ def render_studio_html() -> str:
         <div class="btn-row" id="export-bar" style="margin-bottom:0;">
           <button class="btn btn-primary" onclick="exportBundle('xlsx')">Download 3-Tab Excel (.xlsx)</button>
           <button class="btn" onclick="exportBundle('quickbooks_csv')">Download QuickBooks (.csv)</button>
+          <button class="btn" onclick="copyVerifiedSummary()">Copy Summary for Slack / Email</button>
           <button class="btn" id="top-copy-dispute-btn" style="display:none;" onclick="copySupplierNote()">Copy Supplier Dispute Email</button>
         </div>
       </header>
@@ -244,7 +251,7 @@ def render_studio_html() -> str:
       <div id="download-status" style="margin-bottom:12px; font-size:13px; color:var(--chart-3); font-weight:500;"></div>
 
       <section class="workbench">
-        <div class="card">
+        <div class="card" id="input-card">
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
             <div class="card-title" style="margin-bottom:0;">Step 1 · Bill or statement text</div>
             <span class="pill pill-neutral" id="active-sample-pill">Sample: Bakery supply bill</span>
@@ -269,10 +276,10 @@ def render_studio_html() -> str:
             <label for="raw-doc-input">Bill or statement lines (<span id="line-counter-badge">14 lines pasted · Ready to check</span>)</label>
             <button class="btn btn-sm" onclick="clearInput()">Clear text</button>
           </div>
-          <textarea id="raw-doc-input" spellcheck="false" oninput="updateLineCount()"></textarea>
+          <textarea id="raw-doc-input" spellcheck="false" oninput="updateLineCount(true)" onkeydown="if((event.metaKey||event.ctrlKey)&&event.key==='Enter'){event.preventDefault();runExtractMcp();}"></textarea>
 
           <div class="btn-row" style="margin-bottom:0;">
-            <button class="btn btn-primary" onclick="runExtractMcp()">Check bill math to the penny</button>
+            <button class="btn btn-primary" onclick="runExtractMcp()">Check bill math to the penny (⌘↵)</button>
             <button class="btn" onclick="addCurrentToBatch()">+ Add to batch queue</button>
           </div>
         </div>
@@ -333,7 +340,10 @@ def render_studio_html() -> str:
       </section>
 
       <footer class="site-footer">
-        <div>BillTally · Founder &amp; Creator: Kader Mula · Support: <a href="mailto:mulak1@gmail.com">mulak1@gmail.com</a> · Tools: <code>extract_financial_documents</code>, <code>reconcile_invoices_with_bank_ledger</code>, <code>export_ledger_bundle</code></div>
+        <div>
+          <div>BillTally · Founder &amp; Creator: Kader Mula · Support: <a href="mailto:mulak1@gmail.com">mulak1@gmail.com</a> · Tools: <code>extract_financial_documents</code>, <code>reconcile_invoices_with_bank_ledger</code>, <code>export_ledger_bundle</code></div>
+          <div style="font-size:11.5px; margin-top:4px;">BillTally provides deterministic arithmetic verification and spreadsheet formatting, not certified public accounting (CPA) or tax advice.</div>
+        </div>
         <div style="display:flex; gap:16px;">
           <a href="/about">About</a>
           <a href="/docs">Documentation</a>

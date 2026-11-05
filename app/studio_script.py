@@ -132,19 +132,10 @@ STUDIO_CLIENT_JS = """
     async function runExtractMcp() {
       const rawText = document.getElementById('raw-doc-input').value;
       const rpcReq = {
-        jsonrpc: "2.0",
-        id: "studio-extract-1",
-        method: "tools/call",
-        params: {
-          name: "extract_financial_documents",
-          arguments: { raw_text: rawText, document_type: "invoice", api_key: CURRENT_API_KEY }
-        }
+        jsonrpc: "2.0", id: "studio-extract-1", method: "tools/call",
+        params: { name: "extract_financial_documents", arguments: { raw_text: rawText, document_type: "invoice", api_key: CURRENT_API_KEY } }
       };
-      const res = await fetch('/mcp', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(rpcReq)
-      });
+      const res = await fetch('/mcp', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(rpcReq) });
       const rpcRes = await res.json();
       if (rpcRes.result && rpcRes.result.structuredContent) {
         LAST_EXTRACTED = rpcRes.result.structuredContent;
@@ -199,9 +190,11 @@ STUDIO_CLIENT_JS = """
       if (doc.suggested_category) catSelect.value = doc.suggested_category;
 
       const compCap = document.getElementById('compliance-caption');
-      compCap.innerHTML = doc.requires_1099_review
-        ? '<span class="pill pill-warn">1099-NEC Trackable: Verify W-9 on file</span>'
-        : 'Included in your Excel & CSV exports';
+      const badges = [];
+      if (doc.requires_1099_review) badges.push('<span class="pill pill-warn">1099-NEC Trackable: Verify W-9</span>');
+      if (doc.duplicate_line_items_warning) badges.push('<span class="pill pill-err" title="' + doc.duplicate_line_items_warning + '">⚠ Duplicate Line Item</span>');
+      if (doc.high_tax_rate_warning) badges.push('<span class="pill pill-warn" title="' + doc.high_tax_rate_warning + '">⚠ High Tax Rate (&gt;12%)</span>');
+      compCap.innerHTML = badges.length > 0 ? badges.join(' ') : 'Included in your Excel & CSV exports';
 
       const banner = document.getElementById('audit-banner');
       const actionsBox = document.getElementById('discrepancy-actions');
@@ -254,15 +247,11 @@ STUDIO_CLIENT_JS = """
           : ((li.delta > 0 ? '+' : '') + fmtMoney(li.delta) + ' overcharge');
         return `
           <tr ${rowId} style="${li.line_math_valid ? '' : 'background:#fff5f5;'}">
-            <td>${li.line_number}</td>
-            <td>${li.description}</td>
-            <td class="num">${li.quantity}</td>
-            <td class="num">${fmtMoney(li.unit_price)}</td>
-            <td class="money">${billedCell}</td>
+            <td>${li.line_number}</td><td>${li.description}</td><td class="num">${li.quantity}</td>
+            <td class="num">${fmtMoney(li.unit_price)}</td><td class="money">${billedCell}</td>
             <td class="money">${fmtMoney(li.expected_amount)}</td>
             <td class="num"><span class="pill ${li.line_math_valid ? 'pill-ok' : 'pill-err'}">${badgeText}</span></td>
-          </tr>
-        `;
+          </tr>`;
       }).join('');
 
       const subMismatch = doc.subtotal !== doc.computed_subtotal;
@@ -294,8 +283,24 @@ STUDIO_CLIENT_JS = """
               <td class="num"><span class="pill ${doc.math_verified ? 'pill-ok' : 'pill-err'}">${doc.math_verified ? 'Balanced' : ('+' + fmtMoney(doc.discrepancy_delta) + ' overcharge')}</span></td>
             </tr>
           </tfoot>
-        </table>
-      `;
+        </table>`;
+    }
+
+    function copyVerifiedSummary() {
+      if (!LAST_EXTRACTED) return;
+      const d = LAST_EXTRACTED;
+      const verdict = d.math_verified
+        ? ('✓ Balanced to the penny (' + fmtMoney(d.total) + ')')
+        : ('⚠ Overcharge Caught (Billed ' + fmtMoney(d.total) + ' vs True Math ' + fmtMoney(d.computed_total) + ')');
+      const summary = [
+        'BillTally Verified Bill Summary',
+        'Supplier: ' + d.vendor + ' (Invoice #' + d.invoice_number + ')',
+        'Billed vs. True Math: ' + fmtMoney(d.total) + ' billed / ' + fmtMoney(d.computed_total) + ' verified',
+        'Verdict: ' + verdict,
+        'Line Items & Tax: ' + d.line_items.length + ' line items · Sales Tax ' + fmtMoney(d.tax) + ' (' + Number(d.effective_tax_rate_pct || 0).toFixed(2) + '%)'
+      ].join('\\n');
+      navigator.clipboard.writeText(summary);
+      showToast('✓ Copied 5-line verified bill summary for Slack / Email.');
     }
 
     function copySupplierNote() {
@@ -365,25 +370,13 @@ STUDIO_CLIENT_JS = """
       const useCorrected = document.getElementById('mode-corrected') ? document.getElementById('mode-corrected').checked : false;
       const slug = (LAST_EXTRACTED.invoice_number || 'checked_bills').toLowerCase();
       const rpcReq = {
-        jsonrpc: "2.0",
-        id: "studio-export-1",
-        method: "tools/call",
+        jsonrpc: "2.0", id: "studio-export-1", method: "tools/call",
         params: {
           name: "export_ledger_bundle",
-          arguments: {
-            documents: docsToExport,
-            reconciliation: LAST_RECON,
-            format: fmt,
-            bundle_name: slug + "_ledger",
-            use_corrected_amounts: useCorrected
-          }
+          arguments: { documents: docsToExport, reconciliation: LAST_RECON, format: fmt, bundle_name: slug + "_ledger", use_corrected_amounts: useCorrected }
         }
       };
-      const res = await fetch('/mcp', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(rpcReq)
-      });
+      const res = await fetch('/mcp', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(rpcReq) });
       const rpcRes = await res.json();
       const out = rpcRes.result.structuredContent;
       document.getElementById('download-status').innerHTML =

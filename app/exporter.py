@@ -28,6 +28,17 @@ def sanitize_export_filename(raw_name: str) -> str:
     return cleaned[:80] if cleaned else "schemaextract_ledger"
 
 
+def _build_audit_memo(doc: Dict[str, Any], use_corrected_amounts: bool) -> str:
+    """Return a deterministic audit trail memo for QuickBooks CSV and Excel exports."""
+    if doc.get("math_verified", True):
+        return "Verified: Line items and tax match billed total"
+    billed = float(doc.get("total", 0.0))
+    computed = float(doc.get("computed_total", billed))
+    saved = abs(billed - computed)
+    prefix = "Short-Pay Adjusted" if use_corrected_amounts else "Discrepancy Flagged"
+    return f"{prefix}: Billed ${billed:.2f} vs True Math ${computed:.2f} (Saved ${saved:.2f} on disputed line items)"
+
+
 def _build_xlsx_bytes(
     documents: List[Dict[str, Any]],
     reconciliation: Optional[Dict[str, Any]],
@@ -43,18 +54,9 @@ def _build_xlsx_bytes(
     ws_summary = wb.active
     ws_summary.title = "Executive_Summary"
     summary_headers = [
-        "Document ID",
-        "Supplier / Payee",
-        "Bill / Invoice #",
-        "Bill Date",
-        "Due Date",
-        "Expense Category",
-        "Subtotal",
-        "Tax",
-        "Billed Total",
-        "Checked Math Total",
-        "Math Difference",
-        "Math Check Status",
+        "Document ID", "Supplier / Payee", "Bill / Invoice #", "Bill Date", "Due Date",
+        "Expense Category", "Subtotal", "Tax", "Billed Total", "Checked Math Total",
+        "Math Difference", "Math Check Status", "Audit_Memo",
     ]
     ws_summary.append(summary_headers)
     for col_idx in range(1, len(summary_headers) + 1):
@@ -81,6 +83,7 @@ def _build_xlsx_bytes(
                 f"=ROUND(G{idx}+H{idx},2)",
                 f"=ROUND(I{idx}-J{idx},2)",
                 "Balanced" if doc.get("math_verified", False) else "Overcharge Flagged",
+                _build_audit_memo(doc, use_corrected_amounts),
             ]
         )
 
@@ -246,13 +249,14 @@ def _build_csv_bytes(
     row_count = 0
 
     if quickbooks_mode:
-        writer.writerow(["Date", "Description", "Amount", "Account", "Vendor", "RefNumber", "Memo", "MathVerified"])
+        writer.writerow(["Date", "Description", "Amount", "Account", "Vendor", "RefNumber", "Memo", "MathVerified", "Audit_Memo"])
         for doc in documents:
             vendor = doc.get("vendor", "Unknown Supplier")
             inv_no = doc.get("invoice_number", "INV-UNKNOWN")
             dt = doc.get("issue_date", "2026-10-01")
             category = doc.get("suggested_category", "General Operating Expense")
             verified = "TRUE" if doc.get("math_verified", False) else "FALSE"
+            audit_memo = _build_audit_memo(doc, use_corrected_amounts)
             for item in doc.get("line_items", []):
                 amt = item.get("expected_amount", item.get("amount", 0.0)) if use_corrected_amounts else item.get("amount", 0.0)
                 writer.writerow(
@@ -265,43 +269,26 @@ def _build_csv_bytes(
                         inv_no,
                         f"Qty {item.get('quantity', 1)} @ ${float(item.get('unit_price', 0.0)):.2f}",
                         verified,
+                        audit_memo,
                     ]
                 )
                 row_count += 1
             tax_amt = float(doc.get("tax", 0.0))
             if abs(tax_amt) > 0.001:
                 writer.writerow(
-                    [
-                        dt,
-                        "Sales Tax",
-                        f"{tax_amt:.2f}",
-                        category,
-                        vendor,
-                        inv_no,
-                        "Bill Sales Tax",
-                        verified,
-                    ]
+                    [dt, "Sales Tax", f"{tax_amt:.2f}", category, vendor, inv_no, "Bill Sales Tax", verified, audit_memo]
                 )
                 row_count += 1
     else:
         writer.writerow(
             [
-                "InvoiceNumber",
-                "Vendor",
-                "IssueDate",
-                "DueDate",
-                "Currency",
-                "Category",
-                "LineNumber",
-                "Description",
-                "Quantity",
-                "UnitPrice",
-                "ReportedAmount",
-                "ExpectedAmount",
-                "MathVerified",
+                "InvoiceNumber", "Vendor", "IssueDate", "DueDate", "Currency", "Category",
+                "LineNumber", "Description", "Quantity", "UnitPrice", "ReportedAmount",
+                "ExpectedAmount", "MathVerified", "Audit_Memo",
             ]
         )
         for doc in documents:
+            audit_memo = _build_audit_memo(doc, use_corrected_amounts)
             for item in doc.get("line_items", []):
                 writer.writerow(
                     [
@@ -318,6 +305,7 @@ def _build_csv_bytes(
                         item.get("amount", 0.0),
                         item.get("expected_amount", item.get("amount", 0.0)),
                         doc.get("math_verified", False),
+                        audit_memo,
                     ]
                 )
                 row_count += 1
