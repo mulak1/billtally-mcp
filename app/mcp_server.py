@@ -193,6 +193,7 @@ def handle_mcp_jsonrpc(
     payload: Dict[str, Any],
     quota_manager: QuotaManager,
     export_dir: Optional[Path] = None,
+    default_workspace_id: str = "default-workspace",
 ) -> Tuple[Optional[Dict[str, Any]], int]:
     """Process a single JSON-RPC 2.0 message and return `(response_dict, http_status)`."""
     if not isinstance(payload, dict) or payload.get("jsonrpc") != "2.0":
@@ -263,6 +264,9 @@ def handle_mcp_jsonrpc(
     if method == "tools/call":
         tool_name = params.get("name")
         arguments = params.get("arguments") or {}
+        if tool_name == "extract_financial_documents" and isinstance(arguments, dict):
+            if not arguments.get("workspace_id") or arguments.get("workspace_id") == "default-workspace":
+                arguments = {**arguments, "workspace_id": default_workspace_id}
         return _dispatch_tool_call(req_id, tool_name, arguments, quota_manager, export_dir)
 
     return (

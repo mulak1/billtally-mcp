@@ -790,3 +790,37 @@ def test_security_audit_remediations(client: TestClient, monkeypatch):
     assert "'@SUM(1+1)" in csv_out
 
 
+def test_per_caller_chatgpt_quota_isolation_and_paid_upgrade_gate(client: TestClient):
+    """Proves separate ChatGPT callers never exhaust each other's 15-bill free tier and prod upgrade is Stripe-gated."""
+    preset = get_preset_by_id("messy_saas_invoice")
+    payload = {
+        "jsonrpc": "2.0",
+        "id": "q-iso",
+        "method": "tools/call",
+        "params": {"name": "extract_financial_documents", "arguments": {"raw_text": preset["raw_text"]}},
+    }
+
+    # User Alpha consumes all 15 free monthly checks
+    for _ in range(15):
+        r = client.post("/mcp", json=payload, headers={"openai-ephemeral-user-id": "chatgpt_user_alpha"})
+        assert r.json()["result"]["isError"] is False
+
+    # User Alpha's 16th call hits quota error WITH actionable Stripe + Check2QBO URLs
+    r16 = client.post("/mcp", json=payload, headers={"openai-ephemeral-user-id": "chatgpt_user_alpha"})
+    assert r16.json()["result"]["isError"] is True
+    err_txt = r16.json()["result"]["content"][0]["text"]
+    assert "https://buy.stripe.com/bJedR9cK12BN90903MfAc01" in err_txt
+    assert "https://exactbaseline.com/qbo-check-reconcile" in err_txt
+
+    # User Beta calls immediately afterward -> isolated 15-check bucket succeeds cleanly!
+    r_beta = client.post("/mcp", json=payload, headers={"openai-ephemeral-user-id": "chatgpt_user_beta"})
+    assert r_beta.json()["result"]["isError"] is False
+    assert r_beta.json()["result"]["structuredContent"]["quota_state"]["remaining"] == 14
+
+    # Prod HTTPS unauthenticated POST /api/quota/upgrade rejected (403) and $0 onclick button removed
+    prod_up = client.post("/api/quota/upgrade", headers={"x-forwarded-proto": "https"})
+    assert prod_up.status_code == 403
+    assert 'onclick="upgradePro()"' not in client.get("/").text
+
+
+

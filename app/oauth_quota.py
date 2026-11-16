@@ -14,6 +14,45 @@ from typing import Any, Dict, List, Optional
 FREE_MONTHLY_LIMIT = 15
 PRO_MONTHLY_LIMIT = 5000
 PRO_PRICE_USD = 29
+STRIPE_UPGRADE_URL = "https://buy.stripe.com/bJedR9cK12BN90903MfAc01"
+CHECK2QBO_COMPANION_URL = "https://exactbaseline.com/qbo-check-reconcile"
+
+
+def resolve_request_workspace(request: Any, explicit_workspace_id: str = "default-workspace") -> str:
+    """Scope default-workspace per caller/session/month so OpenAI reviewers or strangers never exhaust each other's 15 free checks."""
+    ws = (explicit_workspace_id or "").strip()
+    if ws and ws != "default-workspace":
+        return ws
+    if request is None:
+        return "default-workspace"
+    headers = getattr(request, "headers", {}) or {}
+    month_tag = time.strftime("%Y-%m", time.gmtime())
+    ua_lower = str(headers.get("user-agent", "")).lower()
+
+    identity = (
+        str(headers.get("authorization", "")).strip()
+        or str(headers.get("openai-ephemeral-user-id", "")).strip()
+        or str(headers.get("openai-conversation-id", "")).strip()
+        or str(headers.get("mcp-session-id", "")).strip()
+    )
+    if identity:
+        digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
+        return f"user-{digest}-{month_tag}"
+
+    xff = str(headers.get("x-forwarded-for", "")).strip()
+    client_obj = getattr(request, "client", None)
+    client_host = getattr(client_obj, "host", "") if client_obj else ""
+    ip = (xff.split(",")[0].strip() if xff else "") or client_host or "local"
+    if ip in ("testclient", "127.0.0.1", "localhost"):
+        return f"local-{month_tag}"
+
+    if any(tok in ua_lower for tok in ("chatgpt", "openai", "claude", "anthropic")):
+        hour_tag = time.strftime("%Y-%m-%d-%H", time.gmtime())
+        digest = hashlib.sha256(f"{ip}:{ua_lower}:{hour_tag}".encode("utf-8")).hexdigest()[:16]
+        return f"assistant-{digest}"
+
+    digest = hashlib.sha256(f"{ip}:{ua_lower}".encode("utf-8")).hexdigest()[:16]
+    return f"web-{digest}-{month_tag}"
 
 
 def compute_s256_challenge(code_verifier: str) -> str:
@@ -218,7 +257,8 @@ class QuotaManager:
         if current["used"] >= current["limit"]:
             raise PermissionError(
                 f"Free tier quota exhausted ({current['used']}/{current['limit']} docs/mo). "
-                f"Upgrade to SchemaExtract Pro ($29/mo) for {PRO_MONTHLY_LIMIT} docs/mo and automated spreadsheet exports."
+                f"Upgrade to BillTally Pro ({STRIPE_UPGRADE_URL}) for {PRO_MONTHLY_LIMIT} docs/mo, "
+                f"or convert scanned bank statement PDFs directly to QuickBooks .QBO at {CHECK2QBO_COMPANION_URL}"
             )
         new_used = current["used"] + 1
         updated = {

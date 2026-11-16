@@ -160,7 +160,16 @@ def render_studio_html() -> str:
         <div style="margin-bottom:8px;">
           <strong id="tier-name">Free Plan</strong> · <span id="quota-used">0</span> of <span id="quota-limit">15</span> bills checked
         </div>
-        <a id="sidebarUpgradeLink" class="btn btn-primary" href="https://buy.stripe.com/bJedR9cK12BN90903MfAc01" target="_blank" rel="noopener noreferrer" style="width:100%; min-block-size:36px; justify-content:center;">Upgrade to Pro ($49.99) <span aria-hidden="true">→</span></a>
+        <a id="sidebarUpgradeLink" class="btn btn-primary" href="https://buy.stripe.com/bJedR9cK12BN90903MfAc01" target="_blank" rel="noopener noreferrer" style="width:100%; min-block-size:36px; justify-content:center; margin-bottom:8px;">Upgrade to Pro ($49.99) <span aria-hidden="true">→</span></a>
+        <details style="margin-bottom:8px;">
+          <summary style="cursor:pointer; color:var(--muted); font-size:11.5px;">Have a Pro API key?</summary>
+          <div style="margin-top:6px; display:flex; flex-direction:column; gap:6px;">
+            <label for="pro-api-key-input" style="font-size:11px; color:var(--muted);">Pro API key</label>
+            <input id="pro-api-key-input" type="text" placeholder="se_pro_..." style="padding:6px 8px; border:1px solid var(--border); border-radius:6px; font-size:12px;" />
+            <button type="button" id="apply-pro-key-btn" class="btn" style="width:100%; min-block-size:32px; justify-content:center; font-size:11.5px;">Activate Pro Key</button>
+          </div>
+        </details>
+        <a href="https://exactbaseline.com/qbo-check-reconcile" target="_blank" rel="noopener noreferrer" style="display:block; font-size:11.5px; color:var(--muted); text-decoration:underline;">Need scanned PDF checks → .QBO? Try Check2QBO <span aria-hidden="true">→</span></a>
       </div>
     </aside>
 

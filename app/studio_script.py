@@ -44,6 +44,10 @@ STUDIO_CLIENT_JS = """
 
     async function initStudio() {
       setGreetingByHour();
+      const applyBtn = document.getElementById('apply-pro-key-btn');
+      if (applyBtn) applyBtn.addEventListener('click', applySavedProKey);
+      const savedKey = localStorage.getItem('bt_pro_api_key');
+      if (savedKey) CURRENT_API_KEY = savedKey;
       const res = await fetch('/api/presets');
       const data = await res.json();
       data.presets.forEach(p => { PRESETS[p.id] = p; });
@@ -68,21 +72,30 @@ STUDIO_CLIENT_JS = """
     }
 
     async function refreshQuota() {
-      const res = await fetch('/api/quota');
+      const qUrl = CURRENT_API_KEY ? ('/api/quota?api_key=' + encodeURIComponent(CURRENT_API_KEY)) : '/api/quota';
+      const res = await fetch(qUrl);
       const q = await res.json();
       document.getElementById('tier-name').textContent = q.tier === 'pro' ? 'Pro Plan' : 'Free Plan';
       document.getElementById('quota-used').textContent = q.used;
       document.getElementById('quota-limit').textContent = q.limit;
     }
 
+    async function applySavedProKey() {
+      const inp = document.getElementById('pro-api-key-input');
+      const val = inp ? inp.value.trim() : '';
+      if (!val.startsWith('se_pro_')) { showToast('Enter a valid BillTally Pro key starting with se_pro_'); return; }
+      CURRENT_API_KEY = val;
+      localStorage.setItem('bt_pro_api_key', val);
+      await refreshQuota();
+      showToast('✓ Pro API key activated (5,000 bills/month).');
+    }
+
     async function activatePaidProSession() {
-      const res = await fetch('/api/quota/upgrade', {
-        method: 'POST',
-        headers: { 'X-Stripe-Return': '1' },
-      });
+      const res = await fetch('/api/quota/upgrade', { method: 'POST', headers: { 'X-Stripe-Return': '1' } });
       if (!res.ok) return;
       const q = await res.json();
       CURRENT_API_KEY = q.api_key;
+      if (q.api_key) localStorage.setItem('bt_pro_api_key', q.api_key);
       await refreshQuota();
       const hLink = document.getElementById('headerUpgradeLink');
       if (hLink) hLink.textContent = '✓ Pro Plan Active ($49.99)';
@@ -109,10 +122,7 @@ STUDIO_CLIENT_JS = """
       const file = ev.dataTransfer && ev.dataTransfer.files && ev.dataTransfer.files[0];
       if (file) readAndCheckFile(file);
     }
-    function handleFileUpload(ev) {
-      const file = ev.target.files && ev.target.files[0];
-      if (file) readAndCheckFile(file);
-    }
+    function handleFileUpload(ev) { const file = ev.target.files && ev.target.files[0]; if (file) readAndCheckFile(file); }
     function readAndCheckFile(file) {
       const reader = new FileReader();
       reader.onload = async (e) => {
@@ -132,7 +142,6 @@ STUDIO_CLIENT_JS = """
       updateLineCount(false);
       await runExtractMcp();
     }
-
     async function runExtractMcp() {
       const rawText = document.getElementById('raw-doc-input').value;
       const rpcReq = {

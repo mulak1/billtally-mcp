@@ -16,7 +16,7 @@ from app.exporter import DEFAULT_EXPORT_DIR, export_ledger_bundle, sanitize_expo
 from app.extractor import extract_financial_document
 from app.mcp_server import MCP_PROTOCOL_VERSION, MCP_TOOLS_CATALOG, handle_mcp_jsonrpc
 from app.models import ExportBundleRequest, ExtractDocumentRequest, ReconcileLedgerRequest
-from app.oauth_quota import OAuth21Server, QuotaManager
+from app.oauth_quota import OAuth21Server, QuotaManager, STRIPE_UPGRADE_URL, resolve_request_workspace
 from app.presets import get_all_presets
 from app.reconciler import reconcile_invoices_with_bank_ledger
 from app.studio_pages import BILLTALLY_FAVICON_SVG, render_about_html, render_docs_html, render_privacy_html, render_terms_html
@@ -95,37 +95,30 @@ def studio_home(request: Request) -> HTMLResponse:
 def analytics_page() -> HTMLResponse:
     return HTMLResponse(content=render_analytics_html())
 
-
 @app.get("/api/analytics")
 def api_analytics() -> Dict[str, Any]:
     return get_analytics_snapshot()
-
 
 @app.get("/chatgpt-openapi.json")
 def chatgpt_openapi_spec(request: Request) -> Dict[str, Any]:
     return build_chatgpt_openapi(base_url=_resolve_public_origin(request))
 
-
 @app.get("/about", response_class=HTMLResponse)
 def about_page() -> HTMLResponse:
     return HTMLResponse(content=render_about_html())
-
 
 @app.get("/docs", response_class=HTMLResponse)
 @app.get("/documentation", response_class=HTMLResponse)
 def public_docs_page() -> HTMLResponse:
     return HTMLResponse(content=render_docs_html())
 
-
 @app.get("/health")
 def health_check() -> Dict[str, Any]:
     return {"status": "ok", "service": "billtally-mcp", "port": 8791, "protocolVersion": MCP_PROTOCOL_VERSION, "tools_count": len(MCP_TOOLS_CATALOG)}
 
-
 @app.get("/privacy", response_class=HTMLResponse)
 def privacy_policy() -> HTMLResponse:
     return HTMLResponse(content=render_privacy_html())
-
 
 @app.get("/terms", response_class=HTMLResponse)
 def terms_of_service() -> HTMLResponse:
@@ -178,10 +171,11 @@ async def mcp_jsonrpc_endpoint(request: Request) -> JSONResponse:
         )
 
     ua = request.headers.get("user-agent", "")
+    caller_ws = resolve_request_workspace(request)
     if isinstance(payload, list):
         responses = []
         for item in payload:
-            resp, _ = handle_mcp_jsonrpc(item, quota_manager=quota_manager)
+            resp, _ = handle_mcp_jsonrpc(item, quota_manager=quota_manager, default_workspace_id=caller_ws)
             if resp is not None:
                 responses.append(resp)
         return JSONResponse(status_code=200, content=responses)
@@ -198,7 +192,7 @@ async def mcp_jsonrpc_endpoint(request: Request) -> JSONResponse:
             t_name = str(params.get("name", "-"))
             record_event(event_type="tool_call", source=src, tool_name=t_name, detail="MCP tools/call")
 
-    resp_dict, status_code = handle_mcp_jsonrpc(payload, quota_manager=quota_manager)
+    resp_dict, status_code = handle_mcp_jsonrpc(payload, quota_manager=quota_manager, default_workspace_id=caller_ws)
     if status_code == 202 or resp_dict is None:
         return Response(status_code=202)
     return JSONResponse(status_code=status_code, content=resp_dict)
@@ -303,37 +297,29 @@ def api_presets() -> Dict[str, Any]:
 
 
 @app.get("/api/quota")
-def api_quota_status(workspace_id: str = "default-workspace", api_key: Optional[str] = None) -> Dict[str, Any]:
-    return quota_manager.get_status(workspace_id=workspace_id, api_key=api_key)
+def api_quota_status(request: Request, workspace_id: str = "default-workspace", api_key: Optional[str] = None) -> Dict[str, Any]:
+    return quota_manager.get_status(workspace_id=resolve_request_workspace(request, workspace_id), api_key=api_key)
 
 
 @app.post("/api/quota/upgrade")
 def api_quota_upgrade(request: Request, workspace_id: str = "default-workspace") -> Response:
-    is_prod_https = (
-        request.headers.get("x-forwarded-proto") == "https"
-        or "railway.app" in str(request.base_url)
-    )
+    is_prod_https = request.headers.get("x-forwarded-proto") == "https" or "railway.app" in str(request.base_url)
     stripe_return = request.headers.get("x-stripe-return", "").strip() == "1"
     admin_secret = os.environ.get("ADMIN_API_SECRET", "").strip()
-    provided_admin = request.headers.get("x-admin-secret", "").strip()
-    admin_ok = bool(admin_secret and hmac.compare_digest(provided_admin, admin_secret))
+    admin_ok = bool(admin_secret and hmac.compare_digest(request.headers.get("x-admin-secret", "").strip(), admin_secret))
     if is_prod_https and not (stripe_return or admin_ok):
-        return JSONResponse(
-            status_code=403,
-            content={
-                "error": "Stripe checkout required to unlock Pro.",
-                "checkout_url": "https://buy.stripe.com/bJedR9cK12BN90903MfAc01",
-            },
-        )
+        return JSONResponse(status_code=403, content={"error": "Stripe checkout required to unlock Pro.", "checkout_url": STRIPE_UPGRADE_URL})
+    ws = resolve_request_workspace(request, workspace_id)
     src = detect_source(request.headers.get("user-agent", ""), path="/api/quota/upgrade")
-    record_event(event_type="pro_unlock", source=src, detail=workspace_id)
-    return JSONResponse(status_code=200, content=quota_manager.upgrade_to_pro(workspace_id=workspace_id))
+    record_event(event_type="pro_unlock", source=src, detail=ws)
+    return JSONResponse(status_code=200, content=quota_manager.upgrade_to_pro(workspace_id=ws))
 
 
 @app.post("/api/extract")
 def api_extract_document(req: ExtractDocumentRequest, request: Request) -> Dict[str, Any]:
+    ws = resolve_request_workspace(request, req.workspace_id)
     try:
-        quota_state = quota_manager.consume_document(req.workspace_id, api_key=req.api_key)
+        quota_state = quota_manager.consume_document(ws, api_key=req.api_key)
     except PermissionError as exc:
         raise HTTPException(status_code=402, detail=str(exc)) from exc
     result = extract_financial_document(req, quota_state=quota_state)
