@@ -308,10 +308,26 @@ def api_quota_status(workspace_id: str = "default-workspace", api_key: Optional[
 
 
 @app.post("/api/quota/upgrade")
-def api_quota_upgrade(request: Request, workspace_id: str = "default-workspace") -> Dict[str, Any]:
+def api_quota_upgrade(request: Request, workspace_id: str = "default-workspace") -> Response:
+    is_prod_https = (
+        request.headers.get("x-forwarded-proto") == "https"
+        or "railway.app" in str(request.base_url)
+    )
+    stripe_return = request.headers.get("x-stripe-return", "").strip() == "1"
+    admin_secret = os.environ.get("ADMIN_API_SECRET", "").strip()
+    provided_admin = request.headers.get("x-admin-secret", "").strip()
+    admin_ok = bool(admin_secret and hmac.compare_digest(provided_admin, admin_secret))
+    if is_prod_https and not (stripe_return or admin_ok):
+        return JSONResponse(
+            status_code=403,
+            content={
+                "error": "Stripe checkout required to unlock Pro.",
+                "checkout_url": "https://buy.stripe.com/bJedR9cK12BN90903MfAc01",
+            },
+        )
     src = detect_source(request.headers.get("user-agent", ""), path="/api/quota/upgrade")
     record_event(event_type="pro_unlock", source=src, detail=workspace_id)
-    return quota_manager.upgrade_to_pro(workspace_id=workspace_id)
+    return JSONResponse(status_code=200, content=quota_manager.upgrade_to_pro(workspace_id=workspace_id))
 
 
 @app.post("/api/extract")

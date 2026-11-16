@@ -49,7 +49,7 @@ STUDIO_CLIENT_JS = """
       data.presets.forEach(p => { PRESETS[p.id] = p; });
       if (window.location.search.includes('pro_activated=1') || localStorage.getItem('bt_pro_active') === '1') {
         localStorage.setItem('bt_pro_active', '1');
-        await upgradePro();
+        await activatePaidProSession();
       } else {
         await refreshQuota();
       }
@@ -75,8 +75,12 @@ STUDIO_CLIENT_JS = """
       document.getElementById('quota-limit').textContent = q.limit;
     }
 
-    async function upgradePro() {
-      const res = await fetch('/api/quota/upgrade', { method: 'POST' });
+    async function activatePaidProSession() {
+      const res = await fetch('/api/quota/upgrade', {
+        method: 'POST',
+        headers: { 'X-Stripe-Return': '1' },
+      });
+      if (!res.ok) return;
       const q = await res.json();
       CURRENT_API_KEY = q.api_key;
       await refreshQuota();
