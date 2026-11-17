@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "billtally-invoice-extractor",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Check supplier bills and receipts to the penny, match invoices against bank statement withdrawals to spot duplicate charges, and export 3-tab Excel (.xlsx) workbooks with live =SUM() formulas.",
   "author": {
     "name": "Kader Mula",
@@ -47,10 +47,7 @@
         "composerIcon": "./assets/icon.png",
         "composerIconDark": "./assets/icon-dark.png",
         "logo": "./assets/logo.png",
-        "logoDark": "./assets/logo-dark.png",
-        "screenshots": [
-          "./assets/screenshot.png"
-        ]
+        "logoDark": "./assets/logo-dark.png"
       },
       "onboardingSkill": "./skills/billtally/SKILL.md",
       "review": {
@@ -107,7 +104,7 @@
         "commerce_description": "This plugin does not process in-chat commerce transactions; all MCP tools are read-only."
       },
       "publication": {
-        "release_notes": "Initial 1.0.0 release with cent-exact supplier bill math verification, bank statement matching, duplicate withdrawal detection, and 3-tab Excel (.xlsx) / CSV export."
+        "release_notes": "Version 1.0.1 visual refresh: upgraded high-resolution light and dark brand icons and logos."
       }
     }
   }
