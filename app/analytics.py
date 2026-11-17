@@ -9,9 +9,15 @@ and anonymized event metadata (timestamp, platform, tool name, format/detail).
 from collections import deque
 from datetime import datetime, timezone
 import html
+import re
 from typing import Any, Deque, Dict
 
 from app.studio_pages import SHARED_PAGE_STYLE
+
+_SECRET_DETAIL_RE = re.compile(
+    r"(_[0-9a-f]{16,64}(?=\.[a-z0-9]+$|$)|\bse_pro_[A-Za-z0-9_]+\b)",
+    re.IGNORECASE,
+)
 
 _COUNTERS: Dict[str, int] = {
     "total_events": 0,
@@ -79,7 +85,8 @@ def record_event(
         _COUNTERS["pro_unlocks"] += 1
 
     safe_tool = str(tool_name or "-")[:80]
-    safe_detail = str(detail or "-")[:80]
+    scrubbed_detail = _SECRET_DETAIL_RE.sub("_[redacted]", str(detail or "-"))
+    safe_detail = scrubbed_detail[:80]
     _RECENT_EVENTS.appendleft(
         {
             "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
@@ -136,7 +143,7 @@ def render_analytics_html() -> str:
     <nav class="top-nav" aria-label="Analytics navigation">
       <a href="/">← Return to BillTally Check Desk</a>
       <div class="links">
-        <a href="/analytics">↻ Refresh Live Telemetry</a>
+        <a href="/analytics">Refresh Live Telemetry</a>
         <a href="/api/analytics">JSON Feed</a>
         <a href="/docs">Documentation</a>
         <a href="/about">About</a>

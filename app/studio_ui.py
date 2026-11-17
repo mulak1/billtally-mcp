@@ -4,18 +4,21 @@ Built on the `achromatic-ledger` design system (`#f8f8f8` paper ground, `#ffffff
 Geist & Geist Mono tabular numerals, <1% chroma budget reserved for verified/discrepancy signals).
 """
 
+import html
 from app.studio_script import STUDIO_CLIENT_JS
 
 
-def render_studio_html() -> str:
+def render_studio_html(csp_nonce: str = "") -> str:
     """Return the complete HTML document for the SchemaExtract Accounting Workbench."""
+    nonce_attr = f' nonce="{html.escape(csp_nonce, quote=True)}"' if csp_nonce else ""
     return (
         """<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>BillTally: Bill Math Checker, Bank Statement Matcher & Spreadsheet Exporter</title>
+  <meta name="color-scheme" content="light" />
+  <title>BillTally: Bill Math Checker, Bank Statement Matcher &amp; Spreadsheet Exporter</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <link rel="icon" type="image/png" href="/icon.png" />
   <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
@@ -24,8 +27,9 @@ def render_studio_html() -> str:
   <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
   <style>
     :root {
+      color-scheme: light;
       --ground: #f8f8f8; --surface: #ffffff; --raised: #eeeeee; --border: #e6e6e6; --rule: #f0f0f0;
-      --control: #d4d4d4; --text: #0a0a0a; --muted: #6b6b6b; --accent: #141414;
+      --control: #949494; --text: #0a0a0a; --muted: #595959; --accent: #141414;
       --positive: #2e7d32; --negative: #c4242a; --warning: #92400e; --chart-3: #1d5fbf;
       --pill-positive-bg: #dcfae5; --pill-positive-ink: #04250e;
       --pill-negative-bg: #ffedea; --pill-negative-ink: #831c1e;
@@ -36,76 +40,94 @@ def render_studio_html() -> str:
       --mono: "Geist Mono", ui-monospace, SFMono-Regular, monospace;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { background: var(--ground); color: var(--text); font-family: var(--sans); font-size: 14px; line-height: 1.5; font-variant-numeric: tabular-nums; }
-    .shell { display: grid; grid-template-columns: 252px 1fr; min-height: 100vh; }
+    body { background: var(--ground); color: var(--text); font-family: var(--sans); font-size: 14px; line-height: 1.5; font-variant-numeric: tabular-nums; overflow-x: hidden; }
+    .skip-link { position: absolute; left: 12px; top: -64px; background: var(--accent); color: #ffffff; padding: 10px 14px; border-radius: var(--radius-control); z-index: 100; text-decoration: none; font-weight: 500; }
+    .skip-link:focus { top: 12px; }
+    .visually-hidden { position: absolute; clip-path: inset(50%); overflow: hidden; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0; white-space: nowrap; }
+    a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus-visible, .file-upload-label:focus-within {
+      outline: 2px solid #0b57d0; outline-offset: 2px;
+    }
+    .shell { display: grid; grid-template-columns: 252px minmax(0, 1fr); min-height: 100vh; }
     .sidebar { background: var(--ground); border-right: 1px solid var(--border); padding: 28px 16px; display: flex; flex-direction: column; justify-content: space-between; }
     .brand { display: flex; align-items: center; gap: 10px; padding: 0 8px 18px; border-bottom: 1px solid var(--border); }
     .brand-mark { width: 34px; height: 34px; border-radius: 8px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
     .nav-group-label { font-size: 12px; color: var(--muted); padding: 18px 8px 6px; }
-    .nav-item { display: flex; align-items: center; height: 32px; padding: 0 10px; border-radius: 6px; color: var(--text); text-decoration: none; font-size: 13.5px; margin-bottom: 2px; cursor: pointer; }
+    .nav-item { display: flex; align-items: center; min-height: 34px; padding: 4px 10px; border-radius: 6px; color: var(--text); text-decoration: none; font-size: 13.5px; margin-bottom: 2px; cursor: pointer; flex-wrap: wrap; }
     .nav-item.active { background: #e9e9e9; font-weight: 500; }
-    .canvas { padding: 32px 36px 64px; max-width: 1240px; }
+    .canvas { padding: 32px 36px 64px; max-width: 1240px; min-width: 0; }
     .greeting-bar { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }
     h1 { font-size: 24px; font-weight: 500; letter-spacing: -0.02em; color: var(--text); }
     .greeting-sub { color: var(--muted); font-size: 14px; margin-top: 4px; max-width: 720px; }
-    .trust-strip { display: flex; flex-wrap: wrap; gap: 16px; font-size: 12px; color: var(--muted); margin-bottom: 14px; padding: 8px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-control); }
-    .steps-strip { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 16px; }
+    .trust-strip { display: flex; flex-wrap: wrap; gap: 12px 16px; font-size: 12px; color: var(--muted); margin-bottom: 14px; padding: 8px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-control); }
+    .steps-strip { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
     .step-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-card); padding: 12px 16px; font-size: 13px; }
     .step-num { font-family: var(--mono); font-size: 11px; color: var(--muted); display: block; margin-bottom: 2px; font-weight: 500; }
-    .kpi-strip { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-card); display: grid; grid-template-columns: repeat(4, 1fr); margin-bottom: 16px; }
-    .kpi-cell { padding: 16px 20px; border-right: 1px solid var(--border); }
+    .kpi-strip { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-card); display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-bottom: 16px; }
+    .kpi-cell { padding: 16px 20px; border-right: 1px solid var(--border); min-width: 0; }
     .kpi-cell:last-child { border-right: none; }
     .kpi-label { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
     .kpi-val { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
-    .kpi-caption { font-size: 12px; color: var(--muted); margin-top: 4px; }
-    .workbench { display: grid; grid-template-columns: 1fr 1.38fr; gap: 16px; align-items: start; }
-    .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-card); padding: 20px; margin-bottom: 16px; }
+    .kpi-caption { font-size: 12px; color: var(--muted); margin-top: 4px; display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+    .workbench { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.38fr); gap: 16px; align-items: start; }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-card); padding: 20px; margin-bottom: 16px; min-width: 0; }
     .card-title { font-size: 16px; font-weight: 500; margin-bottom: 4px; }
     .card-sub { font-size: 12px; color: var(--muted); margin-bottom: 14px; }
     .btn-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
-    .btn { height: 36px; padding: 0 13px; border-radius: var(--radius-control); border: 1px solid var(--control); background: var(--raised); color: var(--text); font-family: var(--sans); font-size: 13px; font-weight: 500; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; text-decoration: none; }
+    .btn { min-height: 36px; padding: 6px 13px; border-radius: var(--radius-control); border: 1px solid var(--control); background: var(--raised); color: var(--text); font-family: var(--sans); font-size: 13px; font-weight: 500; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; text-decoration: none; flex-wrap: wrap; transition: background-color 160ms ease-out, transform 120ms ease-out; }
     .btn:hover { background: #e2e2e2; }
-    .btn-sm { height: 28px; padding: 0 10px; font-size: 12px; }
+    .btn:active { transform: scale(0.98); }
+    .btn-sm { min-height: 32px; padding: 4px 10px; font-size: 12px; }
     .btn.active-preset { border-color: var(--text); background: var(--text); color: #ffffff; }
     .btn-primary { background: var(--accent); color: #ffffff; border-color: var(--accent); }
     .btn-primary:hover { background: #2b2b2b; }
-    .dropzone { border: 1px dashed var(--control); border-radius: var(--radius-control); padding: 10px 12px; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: var(--muted); background: #fcfcfc; }
+    .dropzone { border: 1px dashed var(--control); border-radius: var(--radius-control); padding: 10px 12px; margin-bottom: 10px; display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; align-items: center; font-size: 12px; color: var(--muted); background: #fcfcfc; }
     .dropzone.drag-over { border-color: var(--chart-3); background: #f0f6ff; }
-    .input-meta-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; font-size: 12px; color: var(--muted); }
-    textarea { width: 100%; min-height: 220px; border: 1px solid var(--border); border-radius: var(--radius-control); padding: 12px; font-family: var(--mono); font-size: 12px; color: var(--text); background: #fcfcfc; resize: vertical; margin-bottom: 12px; line-height: 1.55; }
+    .input-meta-bar { display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; align-items: center; margin-bottom: 6px; font-size: 12px; color: var(--muted); }
+    textarea { width: 100%; min-height: 220px; border: 1px solid var(--control); border-radius: var(--radius-control); padding: 12px; font-family: var(--mono); font-size: 13px; color: var(--text); background: #fcfcfc; resize: vertical; margin-bottom: 12px; line-height: 1.55; }
     .banner { padding: 14px 16px; border-radius: var(--radius-control); font-size: 13.5px; margin-bottom: 14px; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
     .banner-ok { background: var(--pill-positive-bg); color: var(--pill-positive-ink); border: 1px solid #b7ebc6; }
     .banner-err { background: var(--pill-negative-bg); color: var(--pill-negative-ink); border: 1px solid #f5c2c7; }
     .banner-warn { background: var(--pill-warning-bg); color: var(--pill-warning-ink); border: 1px solid #fde68a; }
-    .pill { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 500; }
+    .pill { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 500; flex-wrap: wrap; }
     .pill-ok { background: var(--pill-positive-bg); color: var(--pill-positive-ink); }
     .pill-err { background: var(--pill-negative-bg); color: var(--pill-negative-ink); }
     .pill-warn { background: var(--pill-warning-bg); color: var(--pill-warning-ink); }
     .pill-neutral { background: var(--pill-neutral-bg); color: var(--pill-neutral-ink); }
-    table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
-    th, td { height: 42px; padding: 6px 10px; border-bottom: 1px solid var(--rule); text-align: left; }
+    .table-wrap { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    table { width: 100%; min-width: 540px; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+    th, td { min-height: 42px; padding: 8px 10px; border-bottom: 1px solid var(--rule); text-align: left; }
     th { font-size: 12px; font-weight: 500; color: var(--muted); border-bottom: 1px solid var(--border); }
     th.num, td.num { text-align: right; }
-    td.money { font-weight: 700; text-align: right; }
+    td.money { font-weight: 700; text-align: right; white-space: nowrap; }
     del.billed-strike { color: var(--muted); font-weight: 400; margin-right: 6px; text-decoration: line-through; }
-    select.input-select { height: 34px; width: 100%; border: 1px solid var(--control); border-radius: var(--radius-control); padding: 0 8px; font-family: var(--sans); font-size: 13px; background: var(--surface); color: var(--text); }
-    details.collapsible-card > summary { list-style: none; cursor: pointer; display: flex; justify-content: space-between; align-items: center; font-weight: 500; font-size: 15px; }
+    select.input-select { min-height: 36px; width: 100%; border: 1px solid var(--control); border-radius: var(--radius-control); padding: 0 8px; font-family: var(--sans); font-size: 14px; background: var(--surface); color: var(--text); }
+    details.collapsible-card > summary { list-style: none; cursor: pointer; display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; align-items: center; font-weight: 500; font-size: 15px; min-height: 36px; }
     details.collapsible-card > summary::-webkit-details-marker { display: none; }
-    .toast-bar { display: none; padding: 10px 14px; border-radius: var(--radius-control); background: #141414; color: #ffffff; font-size: 13px; font-weight: 500; margin-bottom: 14px; align-items: center; justify-content: space-between; gap: 12px; }
-    .top-bar-links { display: flex; justify-content: flex-end; gap: 18px; padding-bottom: 14px; margin-bottom: 18px; border-bottom: 1px solid var(--border); font-size: 13px; }
-    .top-bar-links a { color: var(--muted); text-decoration: none; font-weight: 500; }
+    .toast-bar { display: none; padding: 10px 14px; border-radius: var(--radius-control); background: #141414; color: #ffffff; font-size: 13px; font-weight: 500; margin-bottom: 14px; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+    .top-bar-links { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 12px 18px; padding-bottom: 14px; margin-bottom: 18px; border-bottom: 1px solid var(--border); font-size: 13px; }
+    .top-bar-links a { color: var(--muted); text-decoration: none; font-weight: 500; display: inline-flex; align-items: center; min-height: 32px; }
     .top-bar-links a:hover { color: var(--text); text-decoration: underline; }
     footer.site-footer { margin-top: 28px; padding-top: 16px; border-top: 1px solid var(--border); display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; font-size: 12.5px; color: var(--muted); }
     footer.site-footer a { color: var(--muted); text-decoration: none; font-weight: 500; }
     footer.site-footer a:hover { color: var(--text); text-decoration: underline; }
+    .icon-inline { width: 15px; height: 15px; flex-shrink: 0; vertical-align: -2px; }
     @media (max-width: 960px) {
       .shell { grid-template-columns: 1fr; }
       .sidebar { border-right: none; border-bottom: 1px solid var(--border); padding: 16px; }
+      .canvas { padding: 20px 16px 48px; }
       .steps-strip, .kpi-strip, .workbench { grid-template-columns: 1fr; }
       .kpi-cell { border-right: none; border-bottom: 1px solid var(--border); }
     }
+    @media (max-width: 768px), (pointer: coarse) {
+      .btn, .btn-sm, .nav-item, select.input-select, .top-bar-links a, #pro-api-key-input { min-height: 44px; font-size: 16px; }
+      .sidebar details > summary { min-height: 44px; display: flex; align-items: center; }
+      textarea { font-size: 16px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .btn { transition: none; }
+    }
     @media print {
-      .sidebar, .top-bar-links, .steps-strip, .dropzone, .btn-row, .toast-bar, #bank-match, #input-card { display: none !important; }
+      .sidebar, .top-bar-links, .steps-strip, .dropzone, .btn-row, .toast-bar, #bank-match, #input-card, .skip-link { display: none !important; }
       .shell, .workbench { display: block !important; }
       .canvas { padding: 0 !important; max-width: 100% !important; }
       body { background: #ffffff !important; }
@@ -113,6 +135,7 @@ def render_studio_html() -> str:
   </style>
 </head>
 <body>
+  <a class="skip-link" href="#workbench">Skip to bill workbench</a>
   <div class="shell">
     <aside class="sidebar" aria-label="Workspace Navigation">
       <div>
@@ -137,17 +160,17 @@ def render_studio_html() -> str:
           </div>
           <div>
             <div style="font-weight:500; font-size:14px;">BillTally</div>
-            <div style="font-size:12px; color:var(--muted);">Bill & Bank Check Desk</div>
+            <div style="font-size:12px; color:var(--muted);">Bill &amp; Bank Check Desk</div>
           </div>
         </div>
         <div class="nav-group-label">Daily bookkeeping</div>
-        <a class="nav-item active" id="nav-bill" href="#workbench" onclick="loadPreset('messy_saas_invoice')">1. Check a supplier bill</a>
-        <a class="nav-item" id="nav-bank" href="#bank-match" onclick="runBankReconciliationPreset(true)">2. Match bank statement</a>
-        <a class="nav-item" id="nav-export" href="#export-bar" onclick="exportBundle('xlsx')">3. Export spreadsheet (.xlsx)</a>
+        <a class="nav-item active" id="nav-bill" href="#workbench" data-preset="messy_saas_invoice">1. Check a supplier bill</a>
+        <a class="nav-item" id="nav-bank" href="#bank-match" data-recon-scroll="true">2. Match bank statement</a>
+        <a class="nav-item" id="nav-export" href="#export-bar" data-export-format="xlsx">3. Export spreadsheet (.xlsx)</a>
         <div class="nav-group-label">Sample bills to try</div>
-        <a class="nav-item" id="side-messy_saas_invoice" href="#workbench" onclick="loadPreset('messy_saas_invoice')">Bakery supply bill (Balanced)</a>
-        <a class="nav-item" id="side-discrepant_contractor_invoice" href="#workbench" onclick="loadPreset('discrepant_contractor_invoice')">Plumbing bill ($200 error)</a>
-        <a class="nav-item" id="side-bank_reconciliation_batch" href="#bank-match" onclick="runBankReconciliationPreset(true)">October checking statement</a>
+        <a class="nav-item" id="side-messy_saas_invoice" href="#workbench" data-preset="messy_saas_invoice">Bakery supply bill (Balanced)</a>
+        <a class="nav-item" id="side-discrepant_contractor_invoice" href="#workbench" data-preset="discrepant_contractor_invoice">Plumbing bill ($200 error)</a>
+        <a class="nav-item" id="side-bank_reconciliation_batch" href="#bank-match" data-recon-scroll="true">October checking statement</a>
         <div class="nav-group-label">Company &amp; Policies</div>
         <a class="nav-item" href="/about">About BillTally</a>
         <a class="nav-item" href="/docs">Documentation</a>
@@ -157,53 +180,52 @@ def render_studio_html() -> str:
 
       <div style="border-top:1px solid var(--border); padding-top:14px; font-size:12px;">
         <div style="color:var(--muted); margin-bottom:4px;">Monthly plan usage</div>
-        <div style="margin-bottom:8px;">
+        <div style="margin-bottom:8px; white-space:nowrap;">
           <strong id="tier-name">Free Plan</strong> · <span id="quota-used">0</span> of <span id="quota-limit">15</span> bills checked
         </div>
-        <a id="sidebarUpgradeLink" class="btn btn-primary" href="https://buy.stripe.com/bJedR9cK12BN90903MfAc01" target="_blank" rel="noopener noreferrer" style="width:100%; min-block-size:36px; justify-content:center; margin-bottom:8px;">Upgrade to Pro ($49.99) <span aria-hidden="true">→</span></a>
+        <a id="sidebarUpgradeLink" class="btn btn-primary" href="https://buy.stripe.com/bJedR9cK12BN90903MfAc01" target="_blank" rel="noopener noreferrer" style="width:100%; justify-content:center; margin-bottom:8px;">Upgrade to Pro ($49.99 Pass) <span aria-hidden="true">→</span></a>
         <details style="margin-bottom:8px;">
-          <summary style="cursor:pointer; color:var(--muted); font-size:11.5px;">Have a Pro API key?</summary>
+          <summary style="cursor:pointer; color:var(--muted); font-size:12px;">Have a Pro API key?</summary>
           <div style="margin-top:6px; display:flex; flex-direction:column; gap:6px;">
-            <label for="pro-api-key-input" style="font-size:11px; color:var(--muted);">Pro API key</label>
-            <input id="pro-api-key-input" type="text" placeholder="se_pro_..." style="padding:6px 8px; border:1px solid var(--border); border-radius:6px; font-size:12px;" />
-            <button type="button" id="apply-pro-key-btn" class="btn" style="width:100%; min-block-size:32px; justify-content:center; font-size:11.5px;">Activate Pro Key</button>
+            <label for="pro-api-key-input" style="font-size:11.5px; color:var(--muted);">Pro API key</label>
+            <input id="pro-api-key-input" name="pro_api_key" type="text" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" placeholder="se_pro_..." style="padding:6px 8px; border:1px solid var(--control); border-radius:6px; font-size:13px;" />
+            <button type="button" id="apply-pro-key-btn" class="btn" style="width:100%; justify-content:center; font-size:12px;">Activate Pro Key</button>
           </div>
         </details>
         <a href="https://exactbaseline.com/qbo-check-reconcile" target="_blank" rel="noopener noreferrer" style="display:block; font-size:11.5px; color:var(--muted); text-decoration:underline;">Need scanned PDF checks → .QBO? Try Check2QBO <span aria-hidden="true">→</span></a>
       </div>
     </aside>
 
-    <main class="canvas" id="workbench">
+    <main class="canvas" id="workbench" tabindex="-1">
       <nav class="top-bar-links" aria-label="Company and documentation links">
         <a href="/about">About</a>
         <a href="/docs">Documentation</a>
         <a href="/analytics">Live Analytics</a>
         <a href="/privacy">Privacy Policy</a>
         <a href="/terms">Terms</a>
-        <a id="headerUpgradeLink" href="https://buy.stripe.com/bJedR9cK12BN90903MfAc01" target="_blank" rel="noopener noreferrer" style="color:var(--positive); font-weight:600; display:inline-flex; align-items:center; gap:4px; min-block-size:28px;">Upgrade to Pro ($49.99) <span aria-hidden="true">→</span></a>
+        <a id="headerUpgradeLink" href="https://buy.stripe.com/bJedR9cK12BN90903MfAc01" target="_blank" rel="noopener noreferrer" style="color:var(--positive); font-weight:600; display:inline-flex; align-items:center; gap:4px;">Upgrade to Pro ($49.99 Pass) <span aria-hidden="true">→</span></a>
       </nav>
       <header class="greeting-bar">
         <div>
-          <h1 id="greeting-heading">Good morning. Welcome to your Bill & Bank Math Check Desk</h1>
+          <h1 id="greeting-heading">Good morning. Welcome to your Bill &amp; Bank Math Check Desk</h1>
           <p class="greeting-sub">
             Drop a file or paste any supplier bill, receipt, or monthly bank statement below. We check every line item
             (Quantity × Unit Price) and sales tax to the penny before you pay the bill or export your spreadsheet.
           </p>
         </div>
         <div class="btn-row" id="export-bar" style="margin-bottom:0;">
-          <button class="btn btn-primary" onclick="exportBundle('xlsx')">Download 3-Tab Excel (.xlsx)</button>
-          <button class="btn" onclick="exportBundle('quickbooks_csv')">Download QuickBooks (.csv)</button>
-          <button class="btn" onclick="copyVerifiedSummary()">Copy Summary for Slack / Email</button>
-          <button class="btn" id="top-copy-dispute-btn" style="display:none;" onclick="copySupplierNote()">Copy Supplier Dispute Email</button>
+          <button type="button" class="btn btn-primary" data-export-format="xlsx">Download 3-Tab Excel (.xlsx)</button>
+          <button type="button" class="btn" data-export-format="quickbooks_csv">Download QuickBooks (.csv)</button>
+          <button type="button" class="btn" id="copy-summary-btn">Copy Summary for Slack / Email</button>
         </div>
       </header>
 
       <div class="trust-strip" role="note" aria-label="Privacy and math guarantee">
         <span><strong>100% Penny-Exact Math:</strong> Every line item is verified with fixed-decimal arithmetic, never guessed.</span>
         <span>·</span>
-        <span><strong>Private & Confidential:</strong> Bills are checked in memory and never used to train models.</span>
+        <span><strong>Private &amp; Confidential:</strong> Bills are checked in memory and never used to train models.</span>
         <span>·</span>
-        <span id="batch-counter-text"><strong>Batch Queue:</strong> 1 bill ready to export</span>
+        <span id="batch-counter-text"><strong>Batch Queue:</strong> 0 bills queued (exports active bill)</span>
       </div>
 
       <section class="steps-strip" aria-label="How this works in 3 plain steps">
@@ -225,7 +247,7 @@ def render_studio_html() -> str:
         <div class="kpi-cell">
           <div class="kpi-label">Billed total (on paper)</div>
           <div class="kpi-val" id="kpi-billed">$6,928.00</div>
-          <div class="kpi-caption" id="kpi-vendor">Heartland Flour & Pantry Supply Co.</div>
+          <div class="kpi-caption" id="kpi-vendor">Heartland Flour &amp; Pantry Supply Co.</div>
         </div>
         <div class="kpi-cell">
           <div class="kpi-label">True math total (Qty × Price + Tax)</div>
@@ -238,95 +260,95 @@ def render_studio_html() -> str:
           <div class="kpi-caption" id="kpi-status-caption">Balanced to the penny · Tax 8.25%</div>
         </div>
         <div class="kpi-cell">
-          <div class="kpi-label">Expense category</div>
+          <label class="kpi-label" for="category-select" style="display:block;">Expense category</label>
           <div style="margin-top:6px;">
-            <select id="category-select" class="input-select" aria-label="Expense category">
-              <option value="Cost of Goods Sold: Food & Pantry">Cost of Goods Sold: Food & Pantry</option>
-              <option value="Repairs & Building Maintenance">Repairs & Building Maintenance</option>
-              <option value="Utilities & Occupancy">Utilities & Occupancy</option>
-              <option value="Outside Services & Operations">Outside Services & Operations</option>
+            <select id="category-select" name="expense_category" class="input-select">
+              <option value="Cost of Goods Sold: Food & Pantry">Cost of Goods Sold: Food &amp; Pantry</option>
+              <option value="Repairs & Building Maintenance">Repairs &amp; Building Maintenance</option>
+              <option value="Utilities & Occupancy">Utilities &amp; Occupancy</option>
+              <option value="Outside Services & Operations">Outside Services &amp; Operations</option>
               <option value="General Operating Expense">General Operating Expense</option>
             </select>
           </div>
-          <div class="kpi-caption" id="compliance-caption">Included in your Excel & CSV exports</div>
+          <div class="kpi-caption" id="compliance-caption">Included in your Excel &amp; CSV exports</div>
         </div>
       </section>
 
       <div id="toast-bar" class="toast-bar" role="status" aria-live="polite">
         <span id="toast-text"></span>
-        <button class="btn btn-sm" onclick="document.getElementById('toast-bar').style.display='none'">Dismiss</button>
+        <button type="button" class="btn btn-sm" id="toast-dismiss-btn">Dismiss</button>
       </div>
-      <div id="download-status" style="margin-bottom:12px; font-size:13px; color:var(--chart-3); font-weight:500;"></div>
+      <div id="download-status" role="status" aria-live="polite" style="margin-bottom:12px; font-size:13px; color:var(--chart-3); font-weight:500;"></div>
 
-      <section class="workbench">
+      <section class="workbench" aria-label="Bill input and verification results">
         <div class="card" id="input-card">
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+          <div style="display:flex; flex-wrap:wrap; gap:8px; justify-content:space-between; align-items:center; margin-bottom:4px;">
             <div class="card-title" style="margin-bottom:0;">Step 1 · Bill or statement text</div>
             <span class="pill pill-neutral" id="active-sample-pill">Sample: Bakery supply bill</span>
           </div>
           <div class="card-sub">Try a sample small-business bill with one click, drop a file, or paste your own text.</div>
 
           <div class="btn-row">
-            <button class="btn active-preset" id="btn-messy_saas_invoice" onclick="loadPreset('messy_saas_invoice')">Bakery bill (Balanced)</button>
-            <button class="btn" id="btn-discrepant_contractor_invoice" onclick="loadPreset('discrepant_contractor_invoice')">Plumbing bill ($200 overcharge)</button>
-            <button class="btn" id="btn-bank_reconciliation_batch" onclick="runBankReconciliationPreset(true)">+ October bank statement</button>
+            <button type="button" class="btn active-preset" id="btn-messy_saas_invoice" data-preset="messy_saas_invoice">Bakery bill (Balanced)</button>
+            <button type="button" class="btn" id="btn-discrepant_contractor_invoice" data-preset="discrepant_contractor_invoice">Plumbing bill ($200 overcharge)</button>
+            <button type="button" class="btn" id="btn-bank_reconciliation_batch" data-recon-scroll="true">+ October bank statement</button>
           </div>
 
-          <div class="dropzone" id="dropzone" ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onFileDrop(event)">
-            <span>Drag & drop a <code>.txt</code> or <code>.csv</code> file here, or choose from computer</span>
-            <label class="btn btn-sm" style="cursor:pointer;">
+          <div class="dropzone" id="dropzone">
+            <span>Drag &amp; drop a <code>.txt</code> or <code>.csv</code> file here, or choose from computer</span>
+            <label class="btn btn-sm file-upload-label" for="file-upload" style="cursor:pointer;">
               Choose file (.txt / .csv)
-              <input type="file" id="file-upload" accept=".txt,.csv" style="display:none" onchange="handleFileUpload(event)" />
+              <input type="file" id="file-upload" name="bill_file" accept=".txt,.csv" class="visually-hidden" />
             </label>
           </div>
 
           <div class="input-meta-bar">
             <label for="raw-doc-input">Bill or statement lines (<span id="line-counter-badge">14 lines pasted · Ready to check</span>)</label>
-            <button class="btn btn-sm" onclick="clearInput()">Clear text</button>
+            <button type="button" class="btn btn-sm" id="clear-input-btn">Clear text</button>
           </div>
-          <textarea id="raw-doc-input" spellcheck="false" oninput="updateLineCount(true)" onkeydown="if((event.metaKey||event.ctrlKey)&&event.key==='Enter'){event.preventDefault();runExtractMcp();}"></textarea>
+          <textarea id="raw-doc-input" name="raw_doc_input" spellcheck="false"></textarea>
 
           <div class="btn-row" style="margin-bottom:0;">
-            <button class="btn btn-primary" onclick="runExtractMcp()">Check bill math to the penny (⌘↵)</button>
-            <button class="btn" onclick="addCurrentToBatch()">+ Add to batch queue</button>
+            <button type="button" class="btn btn-primary" id="run-extract-btn">Check bill math to the penny (⌘↵)</button>
+            <button type="button" class="btn" id="add-batch-btn">+ Add to batch queue</button>
           </div>
         </div>
 
-        <div>
+        <div style="min-width:0;">
           <div class="card">
             <div class="card-title">Step 2 · Bottom-line verdict &amp; line-item check</div>
             <div class="card-sub">Every row is checked by multiplying Quantity × Unit Price and comparing against the billed amount.</div>
 
-            <div id="audit-banner" class="banner banner-ok">
-              <span id="banner-text">✓ Math Checks Out: All 5 line items and tax add up to $6,928.00.</span>
+            <div id="audit-banner" class="banner banner-ok" role="status" aria-live="polite">
+              <span id="banner-text">Math Checks Out: All 5 line items and tax add up to $6,928.00.</span>
               <span class="pill pill-ok" id="confidence-pill">Verified</span>
             </div>
 
-            <div id="discrepancy-actions" style="display:none; margin-bottom:14px; padding:14px; background:#fffafa; border:1px solid #f5c2c7; border-radius:6px;">
-              <div style="font-weight:500; font-size:13px; color:var(--pill-negative-ink); margin-bottom:8px;">
-                How would you like to handle this overcharge when exporting?
-              </div>
+            <fieldset id="discrepancy-actions" style="display:none; margin-bottom:14px; padding:14px; background:#fffafa; border:1px solid #f5c2c7; border-radius:6px;">
+              <legend id="discrepancy-legend" style="font-weight:500; font-size:13px; color:var(--pill-negative-ink); padding:0 4px; margin-bottom:8px;">
+                How would you like to handle this bill difference when exporting?
+              </legend>
               <div style="display:flex; flex-wrap:wrap; gap:14px; align-items:center; font-size:13px; margin-bottom:10px;">
                 <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
-                  <input type="radio" name="export-mode" id="mode-corrected" value="corrected" checked onchange="updateExportModeLabel()" />
-                  Export true math total (<strong id="label-corrected-amt">$6,505.30</strong>, short-pay corrected bill)
+                  <input type="radio" name="export-mode" id="mode-corrected" value="corrected" checked />
+                  Export true math total (<strong id="label-corrected-amt">$6,505.30</strong>, verified line-item math)
                 </label>
                 <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
-                  <input type="radio" name="export-mode" id="mode-billed" value="billed" onchange="updateExportModeLabel()" />
+                  <input type="radio" name="export-mode" id="mode-billed" value="billed" />
                   Export billed total (<strong id="label-billed-amt">$6,705.30</strong>, hold for supplier credit note)
                 </label>
               </div>
               <label for="supplier-note-box" style="font-size:12px; color:var(--muted); display:block; margin-bottom:4px;">
                 Polite note to supplier (you can edit before copying or emailing):
               </label>
-              <textarea id="supplier-note-box" style="min-height:100px; background:#ffffff; margin-bottom:8px;"></textarea>
+              <textarea id="supplier-note-box" name="supplier_note" style="min-height:100px; background:#ffffff; margin-bottom:8px;"></textarea>
               <div class="btn-row" style="margin-bottom:0;">
-                <button class="btn btn-primary" onclick="copySupplierNote()">Copy Supplier Dispute Email</button>
+                <button type="button" class="btn btn-primary" id="copy-dispute-btn">Copy Supplier Dispute Email</button>
                 <a class="btn" id="mailto-link" href="mailto:billing@supplier.example">Open in email app</a>
               </div>
-            </div>
+            </fieldset>
 
-            <div id="table-container"></div>
+            <div class="table-wrap" id="table-container"></div>
           </div>
 
           <details class="card collapsible-card" id="bank-match">
@@ -335,11 +357,11 @@ def render_studio_html() -> str:
               <span class="pill pill-neutral" id="bank-summary-pill">Click to expand</span>
             </summary>
             <div style="margin-top:12px; padding-top:12px; border-top:1px solid var(--border);">
-              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+              <div style="display:flex; flex-wrap:wrap; gap:8px; justify-content:space-between; align-items:center; margin-bottom:8px;">
                 <div class="card-sub" style="margin-bottom:0;">Matches your supplier bills against checking withdrawals to catch unpaid bills and duplicate charges.</div>
-                <button class="btn btn-sm" onclick="runBankReconciliationPreset(false)">Run October bank check</button>
+                <button type="button" class="btn btn-sm" id="run-recon-btn">Run October bank check</button>
               </div>
-              <div id="bank-recon-container" style="font-size:13px; color:var(--muted);">
+              <div class="table-wrap" id="bank-recon-container" style="font-size:13px; color:var(--muted);">
                 Click "Run October bank check" to compare 4 supplier bills against 5 business checking withdrawals.
               </div>
             </div>
@@ -352,7 +374,7 @@ def render_studio_html() -> str:
           <div>BillTally · Founder &amp; Creator: Kader Mula · Support: <a href="mailto:mulak1@gmail.com">mulak1@gmail.com</a> · Tools: <code>extract_financial_documents</code>, <code>reconcile_invoices_with_bank_ledger</code>, <code>export_ledger_bundle</code></div>
           <div style="font-size:11.5px; margin-top:4px;">BillTally provides deterministic arithmetic verification and spreadsheet formatting, not certified public accounting (CPA) or tax advice.</div>
         </div>
-        <div style="display:flex; gap:16px;">
+        <div style="display:flex; flex-wrap:wrap; gap:16px;">
           <a href="/about">About</a>
           <a href="/docs">Documentation</a>
           <a href="/privacy">Privacy Policy</a>
@@ -361,7 +383,9 @@ def render_studio_html() -> str:
       </footer>
     </main>
   </div>
-  <script>"""
+  <script"""
+        + nonce_attr
+        + """>"""
         + STUDIO_CLIENT_JS
         + """</script>
 </body>

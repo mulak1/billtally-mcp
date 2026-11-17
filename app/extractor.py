@@ -11,7 +11,7 @@ import hashlib
 import json
 import re
 from datetime import datetime
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.models import (
@@ -24,15 +24,35 @@ from app.models import (
 _CENT = Decimal("0.01")
 
 
-def _to_dec(val: Any) -> Decimal:
+def _to_raw_dec(val: Any) -> Decimal:
+    """Parse numeric value into an unquantized Decimal without sub-cent truncation or crash on malformed text."""
     if isinstance(val, Decimal):
-        return val.quantize(_CENT, rounding=ROUND_HALF_UP)
+        return val
     if isinstance(val, (int, float)):
-        return Decimal(str(val)).quantize(_CENT, rounding=ROUND_HALF_UP)
-    cleaned = re.sub(r"[^0-9.\-]", "", str(val or "0"))
+        try:
+            return Decimal(str(val))
+        except InvalidOperation:
+            return Decimal("0")
+    raw_str = str(val if val is not None else "0").strip()
+    is_neg = (raw_str.startswith("(") and raw_str.endswith(")")) or raw_str.endswith("-")
+    cleaned = re.sub(r"[^0-9.\-]", "", raw_str)
+    if cleaned.startswith("-") or is_neg:
+        cleaned = "-" + cleaned.replace("-", "")
+    else:
+        cleaned = cleaned.replace("-", "")
+    if cleaned.count(".") > 1:
+        first, rest = cleaned.split(".", 1)
+        cleaned = first + "." + rest.replace(".", "")
     if not cleaned or cleaned in ("-", ".", "-."):
-        return Decimal("0.00")
-    return Decimal(cleaned).quantize(_CENT, rounding=ROUND_HALF_UP)
+        return Decimal("0")
+    try:
+        return Decimal(cleaned)
+    except InvalidOperation:
+        return Decimal("0")
+
+
+def _to_dec(val: Any) -> Decimal:
+    return _to_raw_dec(val).quantize(_CENT, rounding=ROUND_HALF_UP)
 
 
 def _decode_if_structured(raw_text: str) -> Optional[Dict[str, Any]]:
@@ -40,8 +60,14 @@ def _decode_if_structured(raw_text: str) -> Optional[Dict[str, Any]]:
     text = raw_text.strip()
     if text.startswith("base64:"):
         b64_part = text[len("base64:") :].strip()
-        decoded = base64.b64decode(b64_part).decode("utf-8")
-        return json.loads(decoded)
+        try:
+            decoded = base64.b64decode(b64_part, validate=False).decode("utf-8")
+            parsed = json.loads(decoded)
+        except Exception as exc:
+            raise ValueError("Invalid base64-encoded JSON document payload.") from exc
+        if not isinstance(parsed, dict):
+            raise ValueError("Decoded base64 payload must be a JSON object.")
+        return parsed
     if text.startswith("{") and text.endswith("}"):
         try:
             parsed = json.loads(text)
@@ -101,9 +127,9 @@ def _parse_line_items_from_text(text: str) -> List[Dict[str, Any]]:
         items.append(
             {
                 "description": m.group("desc").strip(),
-                "quantity": float(_to_dec(m.group("qty"))),
-                "unit_price": float(_to_dec(m.group("unit"))),
-                "amount": float(_to_dec(m.group("amt"))),
+                "quantity": _to_raw_dec(m.group("qty")),
+                "unit_price": _to_raw_dec(m.group("unit")),
+                "amount": _to_dec(m.group("amt")),
             }
         )
     if items:
@@ -121,9 +147,9 @@ def _parse_line_items_from_text(text: str) -> List[Dict[str, Any]]:
         items.append(
             {
                 "description": desc,
-                "quantity": float(_to_dec(m.group("qty"))),
-                "unit_price": float(_to_dec(m.group("unit"))),
-                "amount": float(_to_dec(m.group("amt"))),
+                "quantity": _to_raw_dec(m.group("qty")),
+                "unit_price": _to_raw_dec(m.group("unit")),
+                "amount": _to_dec(m.group("amt")),
             }
         )
     if items:
@@ -138,9 +164,9 @@ def _parse_line_items_from_text(text: str) -> List[Dict[str, Any]]:
         items.append(
             {
                 "description": m.group("desc").strip(),
-                "quantity": float(_to_dec(m.group("qty"))),
-                "unit_price": float(_to_dec(m.group("unit"))),
-                "amount": float(_to_dec(m.group("amt"))),
+                "quantity": _to_raw_dec(m.group("qty")),
+                "unit_price": _to_raw_dec(m.group("unit")),
+                "amount": _to_dec(m.group("amt")),
             }
         )
     return items
@@ -164,18 +190,19 @@ def extract_financial_document(
     quota_state: Optional[Dict[str, Any]] = None,
 ) -> ExtractedDocumentResult:
     """
-    Parse a financial document and execute deterministic cent-level mathematical reconciliation.
+    Parse a financial document and execute deterministic fixed-decimal mathematical reconciliation.
     Returns a new immutable `ExtractedDocumentResult`.
     """
     structured = _decode_if_structured(req.raw_text)
     if structured is not None:
-        vendor = str(structured.get("vendor", "Unknown Supplier"))
-        invoice_number = str(structured.get("invoice_number", "INV-UNKNOWN"))
-        issue_date = str(structured.get("issue_date", "2026-10-01"))
-        due_date = structured.get("due_date")
-        currency = str(req.currency_hint or structured.get("currency", "USD")).upper()
-        raw_items = list(structured.get("line_items", []))
-        subtotal = _to_dec(structured.get("subtotal", sum(_to_dec(i.get("amount", 0)) for i in raw_items)))
+        vendor = str(structured.get("vendor", "Unknown Supplier"))[:240]
+        invoice_number = str(structured.get("invoice_number", "INV-UNKNOWN"))[:120]
+        issue_date = str(structured.get("issue_date", "2026-10-01"))[:32]
+        due_date = str(structured["due_date"])[:32] if structured.get("due_date") else None
+        currency = str(req.currency_hint or structured.get("currency", "USD")).strip().upper()[:10] or "USD"
+        raw_items_src = structured.get("line_items", [])
+        raw_items = [i for i in raw_items_src if isinstance(i, dict)] if isinstance(raw_items_src, list) else []
+        subtotal = _to_dec(structured.get("subtotal", sum((_to_dec(i.get("amount", 0)) for i in raw_items), Decimal("0.00"))))
         tax = _to_dec(structured.get("tax", 0))
         total = _to_dec(structured.get("total", subtotal + tax))
     else:
@@ -184,36 +211,39 @@ def extract_financial_document(
             text,
             [r"Vendor\s*:\s*([^\n]+)", r"From\s*:\s*([^\n]+)", r"INVOICE STATEMENT\s*[:\-]\s*([^\n]+)"],
             "Unclassified Supplier",
-        )
+        )[:240]
         invoice_number = _extract_header_field(
             text,
             [r"Invoice(?:\s+Number|\s*#)?\s*:\s*([A-Za-z0-9\-_]+)", r"Statement\s*#\s*:\s*([A-Za-z0-9\-_]+)"],
             "INV-UNNUMBERED",
-        )
+        )[:120]
         issue_date = _extract_header_field(text, [r"(?:Issue\s+)?Date\s*:\s*(\d{4}-\d{2}-\d{2})"], "2026-10-01")
         due_raw = _extract_header_field(text, [r"Due\s+Date\s*:\s*(\d{4}-\d{2}-\d{2})"], "")
         due_date = due_raw if due_raw else None
-        currency = (req.currency_hint or _extract_header_field(text, [r"Currency\s*:\s*([A-Z]{3})"], "USD")).upper()
+        currency = (req.currency_hint or _extract_header_field(text, [r"Currency\s*:\s*([A-Z]{3})"], "USD")).strip().upper()[:10] or "USD"
         raw_items = _parse_line_items_from_text(text)
         subtotal, tax, total = _extract_totals(text, raw_items)
 
+    tol = Decimal("0.00") if req.strict_reconciliation else Decimal("0.02")
     normalized_items: List[LineItem] = []
     discrepancies: List[MathDiscrepancy] = []
     computed_subtotal = Decimal("0.00")
 
     for idx, item in enumerate(raw_items, start=1):
-        qty = _to_dec(item.get("quantity", 1))
-        unit = _to_dec(item.get("unit_price", 0))
+        qty = _to_raw_dec(item.get("quantity", 1))
+        unit = _to_raw_dec(item.get("unit_price", 0))
         reported_amt = _to_dec(item.get("amount", 0))
         expected_amt = (qty * unit).quantize(_CENT, rounding=ROUND_HALF_UP)
         line_delta = (reported_amt - expected_amt).quantize(_CENT, rounding=ROUND_HALF_UP)
-        line_valid = line_delta == Decimal("0.00")
+        line_valid = abs(line_delta) <= tol
         computed_subtotal = (computed_subtotal + expected_amt).quantize(_CENT, rounding=ROUND_HALF_UP)
+        desc_str = (str(item.get("description") or f"Line Item {idx}").strip() or f"Line Item {idx}")[:500]
+        unit_fmt = f"{unit:,.4f}".rstrip("0").rstrip(".") if unit != unit.quantize(_CENT, rounding=ROUND_HALF_UP) else f"{unit:,.2f}"
 
         normalized_items.append(
             LineItem(
                 line_number=idx,
-                description=str(item.get("description", f"Line Item {idx}")),
+                description=desc_str,
                 quantity=float(qty),
                 unit_price=float(unit),
                 amount=float(reported_amt),
@@ -231,8 +261,8 @@ def extract_financial_document(
                     delta=float(line_delta),
                     severity="HIGH",
                     explanation=(
-                        f"Line {idx} ({item.get('description')}): "
-                        f"{qty} × ${unit:,.2f} should be ${expected_amt:,.2f}, "
+                        f"Line {idx} ({desc_str}): "
+                        f"{qty} × ${unit_fmt} should be ${expected_amt:,.2f}, "
                         f"but the bill lists ${reported_amt:,.2f} (a ${line_delta:+,.2f} difference)."
                     ),
                 )
@@ -242,7 +272,7 @@ def extract_financial_document(
         computed_subtotal = subtotal
 
     subtotal_delta = (subtotal - computed_subtotal).quantize(_CENT, rounding=ROUND_HALF_UP)
-    if subtotal_delta != Decimal("0.00"):
+    if abs(subtotal_delta) > tol:
         discrepancies.append(
             MathDiscrepancy(
                 field="subtotal",
@@ -259,7 +289,7 @@ def extract_financial_document(
 
     computed_total = (computed_subtotal + tax).quantize(_CENT, rounding=ROUND_HALF_UP)
     total_delta = (total - computed_total).quantize(_CENT, rounding=ROUND_HALF_UP)
-    if total_delta != Decimal("0.00"):
+    if abs(total_delta) > tol:
         discrepancies.append(
             MathDiscrepancy(
                 field="total",
@@ -280,16 +310,18 @@ def extract_financial_document(
     confidence = 0.98 if (math_verified and len(normalized_items) > 0) else (0.82 if normalized_items else 0.55)
     category = _infer_category(vendor, req.raw_text)
     terms = _compute_payment_terms(issue_date, due_date)
-    eff_tax = float(round((tax / computed_subtotal) * Decimal("100"), 2)) if computed_subtotal > 0 else 0.0
-    needs_1099 = ("Repairs" in category or "Services" in category) and float(computed_total) >= 600.0
+    eff_tax_dec = ((tax / computed_subtotal) * Decimal("100")).quantize(_CENT, rounding=ROUND_HALF_UP) if computed_subtotal > Decimal("0.00") else Decimal("0.00")
+    eff_tax = float(eff_tax_dec)
+    needs_1099 = ("Repairs" in category or "Services" in category) and computed_total >= Decimal("600.00")
 
-    seen_lines: Dict[Tuple[str, float], int] = {}
+    seen_lines: Dict[Tuple[str, Decimal], int] = {}
     dup_labels: List[str] = []
     for li in normalized_items:
-        sig = (li.description.strip().lower(), round(li.amount, 2))
+        amt_dec = _to_dec(li.amount)
+        sig = (li.description.strip().lower(), amt_dec)
         seen_lines[sig] = seen_lines.get(sig, 0) + 1
         if seen_lines[sig] == 2:
-            dup_labels.append(f"{li.description} (${li.amount:,.2f})")
+            dup_labels.append(f"{li.description} (${amt_dec:,.2f})")
     dup_count = sum(c - 1 for c in seen_lines.values() if c > 1)
     dup_warning = (
         f"Potential duplicate line item: {', '.join(dup_labels)} appears more than once on this bill."
@@ -298,7 +330,7 @@ def extract_financial_document(
     )
     high_tax_warning = (
         f"High effective tax rate ({eff_tax:.2f}% > 12%): verify local tax rate or non-taxable fees."
-        if eff_tax > 12.0
+        if eff_tax_dec > Decimal("12.00")
         else None
     )
 
@@ -309,7 +341,7 @@ def extract_financial_document(
         )
         dispute_note = None
     else:
-        direction = "overcharged" if total_delta > 0 else "under-billed"
+        direction = "overcharged" if total_delta > Decimal("0.00") else "under-billed"
         plain_summary = (
             f"Hold payment: This bill from {vendor} is {direction} by ${abs(total_delta):,.2f}. "
             f"The true total is ${computed_total:,.2f}, not ${total:,.2f}."

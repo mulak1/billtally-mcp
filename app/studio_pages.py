@@ -24,6 +24,7 @@ BILLTALLY_FAVICON_SVG = (
 )
 
 SHARED_PAGE_STYLE = """
+  <meta name="color-scheme" content="light" />
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <link rel="icon" type="image/png" href="/icon.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -31,6 +32,7 @@ SHARED_PAGE_STYLE = """
   <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
   <style>
     :root {
+      color-scheme: light;
       --ground: #f8f8f8; --surface: #ffffff; --border: #e6e6e6; --text: #0a0a0a;
       --muted: #6b6b6b; --accent: #141414; --positive: #2e7d32; --chart-3: #1d5fbf;
       --sans: "Geist", -apple-system, BlinkMacSystemFont, sans-serif;
@@ -38,9 +40,10 @@ SHARED_PAGE_STYLE = """
     }
     * { box-sizing: border-box; }
     body { background: var(--ground); color: var(--text); font-family: var(--sans); margin: 0; padding: 40px 20px; line-height: 1.65; font-size: 15px; }
-    main { max-width: 840px; margin: 0 auto; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 36px 40px; }
+    main { max-width: 840px; margin: 0 auto; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 36px 40px; overflow-x: auto; }
     nav.top-nav { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; padding-bottom: 18px; margin-bottom: 24px; border-bottom: 1px solid var(--border); font-size: 13.5px; }
-    nav.top-nav .links { display: flex; gap: 18px; }
+    nav.top-nav .links { display: flex; flex-wrap: wrap; gap: 18px; }
+    a:focus-visible { outline: 2px solid #0b57d0; outline-offset: 2px; border-radius: 3px; }
     h1 { font-size: 26px; font-weight: 600; letter-spacing: -0.02em; margin: 0 0 8px; color: var(--text); }
     h2 { font-size: 17px; font-weight: 600; margin: 28px 0 8px; color: var(--text); }
     p, li { color: var(--text); max-width: 72ch; }
@@ -52,6 +55,10 @@ SHARED_PAGE_STYLE = """
     th { font-weight: 500; color: var(--muted); background: var(--ground); }
     a { color: var(--chart-3); text-decoration: none; font-weight: 500; }
     a:hover { text-decoration: underline; }
+    @media (max-width: 640px) {
+      body { padding: 16px 10px; }
+      main { padding: 20px 16px; }
+    }
   </style>
 """
 
@@ -197,10 +204,10 @@ def render_privacy_html() -> str:
     <p><strong>Effective Date:</strong> November 2, 2026. Your financial documents belong strictly to you. We never train AI models on your bills, receipts, or bank statements, and we never sell or share your data.</p>
 
     <h2>1. Zero Training on Customer Financial Data</h2>
-    <p>Supplier bills, invoices, receipts, and bank statement rows submitted through the BillTally Check Desk or via the Claude and ChatGPT connectors are processed solely to verify line-item math, reconcile statement rows, and generate your requested spreadsheet export. Your content is never used to train, fine-tune, or improve foundation models (`trains_on_customer_data: false`).</p>
+    <p>Supplier bills, invoices, receipts, and bank statement rows submitted through the BillTally Check Desk or via the Claude and ChatGPT connectors are processed solely to verify line-item math, reconcile statement rows, and generate your requested spreadsheet export. Your content is never used to train, fine-tune, or improve foundation models (<code>trains_on_customer_data: false</code>).</p>
 
     <h2>2. Ephemeral In-Memory Processing</h2>
-    <p>All calculations use deterministic fixed-decimal arithmetic (`deterministic_math_engine: true`) in memory. Generated Excel (<code>.xlsx</code>) and CSV files are held temporarily in memory solely so you can download them during your active session. We do not maintain permanent archives of your financial records.</p>
+    <p>All calculations use deterministic fixed-decimal arithmetic (<code>deterministic_math_engine: true</code>) in memory. Generated Excel (<code>.xlsx</code>) and CSV files are held temporarily in memory solely so you can download them during your active session. We do not maintain permanent archives of your financial records.</p>
 
     <h2>3. Transport &amp; Authentication Security</h2>
     <p>All connections use HTTPS (TLS 1.3) encryption in transit, and authentication via Claude and ChatGPT supports OAuth 2.1 with S256 PKCE verification.</p>
@@ -235,7 +242,7 @@ def render_terms_html() -> str:
     <p>All BillTally MCP tools operate in a stateless, read-only manner on the text and figures you provide in your session. You remain in full control of which bills to approve, short-pay, or import into your accounting software.</p>
 
     <h2>3. Service Plans &amp; Fair Use</h2>
-    <p>BillTally provides a Free tier (up to 15 bill checks per month at $0) and a Pro tier (up to 5,000 bill checks per month at $29/month, `pro_price_usd_monthly: 29`) for high-volume bookkeeping practices.</p>
+    <p>BillTally provides a Free tier (up to 15 bill checks per month at $0) and a Pro tier (up to 5,000 bill checks per month via a $29/month MCP workspace plan, <code>pro_price_usd_monthly: 29</code>, or a $49.99 instant Stripe Pro Pass on the Web Check Desk) for high-volume bookkeeping practices.</p>
 
     <h2>4. Contact</h2>
     <p>For support, billing, or terms inquiries, please contact Kader Mula at <a href="mailto:mulak1@gmail.com">mulak1@gmail.com</a>.</p>

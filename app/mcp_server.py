@@ -194,6 +194,8 @@ def handle_mcp_jsonrpc(
     quota_manager: QuotaManager,
     export_dir: Optional[Path] = None,
     default_workspace_id: str = "default-workspace",
+    is_prod: bool = False,
+    caller_ip: str = "",
 ) -> Tuple[Optional[Dict[str, Any]], int]:
     """Process a single JSON-RPC 2.0 message and return `(response_dict, http_status)`."""
     if not isinstance(payload, dict) or payload.get("jsonrpc") != "2.0":
@@ -265,9 +267,12 @@ def handle_mcp_jsonrpc(
         tool_name = params.get("name")
         arguments = params.get("arguments") or {}
         if tool_name == "extract_financial_documents" and isinstance(arguments, dict):
-            if not arguments.get("workspace_id") or arguments.get("workspace_id") == "default-workspace":
+            has_pro = quota_manager.is_valid_pro_key(arguments.get("api_key"), is_prod=is_prod)
+            if (is_prod and not has_pro) or not arguments.get("workspace_id") or arguments.get("workspace_id") == "default-workspace":
                 arguments = {**arguments, "workspace_id": default_workspace_id}
-        return _dispatch_tool_call(req_id, tool_name, arguments, quota_manager, export_dir)
+        return _dispatch_tool_call(
+            req_id, tool_name, arguments, quota_manager, export_dir, is_prod=is_prod, caller_ip=caller_ip
+        )
 
     return (
         {
@@ -318,14 +323,21 @@ def _dispatch_tool_call(
     arguments: Dict[str, Any],
     quota_manager: QuotaManager,
     export_dir: Optional[Path],
+    *,
+    is_prod: bool = False,
+    caller_ip: str = "",
 ) -> Tuple[Dict[str, Any], int]:
     """Execute one of the 3 registered MCP tools and format the MCP `content` + `structuredContent` response."""
     try:
         arguments = _coerce_tool_arguments(tool_name, arguments)
         if tool_name == "extract_financial_documents":
             req = ExtractDocumentRequest(**arguments)
-            quota_state = quota_manager.consume_document(req.workspace_id, api_key=req.api_key)
-            result_obj = extract_financial_document(req, quota_state=quota_state)
+            quota_manager.check_available(req.workspace_id, api_key=req.api_key, is_prod=is_prod, caller_ip=caller_ip)
+            parsed_obj = extract_financial_document(req)
+            quota_state = quota_manager.consume_document(
+                req.workspace_id, api_key=req.api_key, is_prod=is_prod, caller_ip=caller_ip
+            )
+            result_obj = parsed_obj.model_copy(update={"quota_state": quota_state})
             structured = result_obj.model_dump()
             summary_line = (
                 f"Hello! Here is your bill check for {result_obj.vendor} (Invoice #{result_obj.invoice_number}): "
