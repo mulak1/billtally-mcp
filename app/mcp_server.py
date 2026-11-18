@@ -56,6 +56,14 @@ MCP_TOOLS_CATALOG: List[Dict[str, Any]] = [
                     "default": True,
                     "description": "When true, enforces cent-exact verification across every line item (Quantity multiplied by Unit Price) and sales tax total.",
                 },
+                "workspace_id": {
+                    "type": "string",
+                    "description": "Optional workspace identifier for monthly bill-check quota tracking.",
+                },
+                "api_key": {
+                    "type": "string",
+                    "description": "Optional BillTally Pro API key for high-volume monthly bill checks (5,000 docs/mo).",
+                },
             },
             "required": ["raw_text"],
         },
@@ -108,6 +116,10 @@ MCP_TOOLS_CATALOG: List[Dict[str, Any]] = [
                     "maximum": 100.0,
                     "description": "Maximum dollar rounding difference allowed when matching a bill total to a bank withdrawal.",
                 },
+                "api_key": {
+                    "type": "string",
+                    "description": "Optional BillTally Pro API key.",
+                },
             },
             "required": ["invoices", "bank_transactions"],
         },
@@ -156,6 +168,10 @@ MCP_TOOLS_CATALOG: List[Dict[str, Any]] = [
                     "type": "boolean",
                     "default": False,
                     "description": "When true, formats the spreadsheet using verified true math totals instead of overcharged billed figures.",
+                },
+                "api_key": {
+                    "type": "string",
+                    "description": "Optional BillTally Pro API key.",
                 },
             },
             "required": ["documents"],

@@ -822,5 +822,23 @@ def test_per_caller_chatgpt_quota_isolation_and_paid_upgrade_gate(client: TestCl
     assert prod_up.status_code == 403
     assert 'onclick="upgradePro()"' not in client.get("/").text
 
+    # Verify MCP_TOOLS_CATALOG exposes api_key across all tools and workspace_id on extract_financial_documents
+    tools_res = client.post("/mcp", json={"jsonrpc": "2.0", "id": "t-list", "method": "tools/list", "params": {}}).json()
+    for tool_def in tools_res["result"]["tools"]:
+        props = tool_def["inputSchema"]["properties"]
+        assert "api_key" in props and props["api_key"]["type"] == "string"
+        if tool_def["name"] == "extract_financial_documents":
+            assert "workspace_id" in props and props["workspace_id"]["type"] == "string"
+
+    # Verify two-stage Stripe webhook + browser session claim idempotency
+    qm = QuotaManager()
+    wh_up, wh_logged = qm.redeem_stripe_webhook("cs_live_two_stage_01", "ws-stripe-buyer")
+    assert wh_up is not None and wh_up["tier"] == "pro" and wh_logged is True
+    br_up, br_logged = qm.claim_stripe_browser_session("cs_live_two_stage_01", "ws-stripe-buyer")
+    assert br_up is not None and br_up["api_key"] == wh_up["api_key"] and br_logged is False
+    replay_up, _ = qm.claim_stripe_browser_session("cs_live_two_stage_01", "ws-stripe-buyer")
+    assert replay_up is None
+
+
 
 
