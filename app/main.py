@@ -8,6 +8,7 @@ import secrets
 from typing import Any, Callable, Dict, Optional
 from urllib.parse import parse_qs
 
+import anyio
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 import uvicorn
@@ -17,14 +18,8 @@ from app.exporter import DEFAULT_EXPORT_DIR, export_ledger_bundle, get_ephemeral
 from app.extractor import extract_financial_document
 from app.mcp_server import MCP_PROTOCOL_VERSION, MCP_TOOLS_CATALOG, handle_mcp_jsonrpc
 from app.models import ExportBundleRequest, ExtractDocumentRequest, ReconcileLedgerRequest
-from app.oauth_quota import (
-    OAuth21Server,
-    QuotaManager,
-    STRIPE_UPGRADE_URL,
-    _is_production_runtime,
-    extract_caller_ip,
-    resolve_request_workspace,
-)
+from app.oauth_quota import OAuth21Server, QuotaManager, STRIPE_UPGRADE_URL, _is_production_runtime, extract_caller_ip, resolve_request_workspace
+from app.pdf_vision_helper import extract_invoice_text_from_upload, parse_upload_from_request
 from app.presets import get_all_presets
 from app.reconciler import reconcile_invoices_with_bank_ledger
 from app.stripe_verify import verify_paid_stripe_checkout_session as _verify_paid_stripe_checkout_session, verify_stripe_webhook_signature as _verify_stripe_webhook_signature
@@ -76,8 +71,9 @@ async def security_headers_and_body_cap(request: Request, call_next: Callable) -
     resp.headers["Cross-Origin-Opener-Policy"] = "same-origin-allow-popups"
     resp.headers["Content-Security-Policy"] = (
         f"default-src 'self'; script-src 'self' 'nonce-{csp_nonce}'; "
+        "worker-src 'self' blob:; "
         "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-        "font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data:; "
+        "font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob:; "
         "connect-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'"
     )
     return resp
@@ -191,59 +187,35 @@ async def mcp_jsonrpc_endpoint(request: Request) -> Response:
     try:
         payload = await request.json()
     except Exception:
-        return JSONResponse(
-            status_code=400,
-            content={"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error: invalid JSON payload."}},
-        )
-
+        return JSONResponse(status_code=400, content={"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error: invalid JSON payload."}})
     ua = request.headers.get("user-agent", "")
-    is_prod = _is_production_runtime(request)
-    caller_ip = extract_caller_ip(request)
+    is_prod, caller_ip = _is_production_runtime(request), extract_caller_ip(request)
     caller_ws = resolve_request_workspace(request, oauth_server=oauth_server, quota_manager=quota_manager)
     if isinstance(payload, list):
         if len(payload) == 0:
-            return JSONResponse(
-                status_code=400,
-                content={"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "Invalid Request: empty JSON-RPC batch."}},
-            )
-        responses = []
-        for item in payload:
-            resp, _ = handle_mcp_jsonrpc(
-                item, quota_manager=quota_manager, default_workspace_id=caller_ws, is_prod=is_prod, caller_ip=caller_ip
-            )
-            if resp is not None:
-                responses.append(resp)
-        if not responses:
-            return Response(status_code=202)
-        return JSONResponse(status_code=200, content=responses)
-
+            return JSONResponse(status_code=400, content={"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "Invalid Request: empty JSON-RPC batch."}})
+        responses = [
+            resp for item in payload
+            if (resp := handle_mcp_jsonrpc(item, quota_manager=quota_manager, default_workspace_id=caller_ws, is_prod=is_prod, caller_ip=caller_ip)[0]) is not None
+        ]
+        return Response(status_code=202) if not responses else JSONResponse(status_code=200, content=responses)
     if isinstance(payload, dict):
-        method = payload.get("method", "")
-        params = payload.get("params") or {}
-        req_id = str(payload.get("id", ""))
+        method, params, req_id = payload.get("method", ""), payload.get("params") or {}, str(payload.get("id", ""))
         client_name = (params.get("clientInfo") or {}).get("name", "") if isinstance(params, dict) else ""
         src = "Web Desk" if req_id.startswith("studio-") else detect_source(ua, path="/mcp", client_name=client_name)
         if method == "initialize":
             record_event(event_type="mcp_connect", source=src, detail=client_name or "MCP initialize")
         elif method == "tools/call":
-            t_name = str(params.get("name", "-"))
-            record_event(event_type="tool_call", source=src, tool_name=t_name, detail="MCP tools/call")
-
-    resp_dict, status_code = handle_mcp_jsonrpc(
-        payload, quota_manager=quota_manager, default_workspace_id=caller_ws, is_prod=is_prod, caller_ip=caller_ip
-    )
-    if status_code == 202 or resp_dict is None:
-        return Response(status_code=202)
-    return JSONResponse(status_code=status_code, content=resp_dict)
+            record_event(event_type="tool_call", source=src, tool_name=str(params.get("name", "-")), detail="MCP tools/call")
+    resp_dict, status_code = handle_mcp_jsonrpc(payload, quota_manager=quota_manager, default_workspace_id=caller_ws, is_prod=is_prod, caller_ip=caller_ip)
+    return Response(status_code=202) if (status_code == 202 or resp_dict is None) else JSONResponse(status_code=status_code, content=resp_dict)
 
 
 @app.get("/.well-known/oauth-authorization-server")
 def oauth_metadata(request: Request) -> Response:
-    is_prod_https = _is_production_runtime(request)
-    if is_prod_https and request.query_params.get("oauth") != "1":
+    if _is_production_runtime(request) and request.query_params.get("oauth") != "1":
         return JSONResponse(status_code=404, content={"detail": "Not Found"})
-    base = _resolve_public_origin(request)
-    return JSONResponse(status_code=200, content=oauth_server.metadata(base_url=base))
+    return JSONResponse(status_code=200, content=oauth_server.metadata(base_url=_resolve_public_origin(request)))
 
 
 @app.post("/oauth/register")
@@ -253,11 +225,7 @@ async def oauth_register(request: Request) -> JSONResponse:
     except Exception:
         body = {}
     try:
-        registered = oauth_server.register_client(
-            client_name=str(body.get("client_name", "MCP Assistant Client")),
-            redirect_uris=body.get("redirect_uris"),
-            caller_ip=extract_caller_ip(request),
-        )
+        registered = oauth_server.register_client(client_name=str(body.get("client_name", "MCP Assistant Client")), redirect_uris=body.get("redirect_uris"), caller_ip=extract_caller_ip(request))
         return JSONResponse(status_code=201, content=registered)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -265,23 +233,14 @@ async def oauth_register(request: Request) -> JSONResponse:
 
 @app.get("/oauth/authorize")
 def oauth_authorize(
-    response_type: str = Query(...),
-    client_id: str = Query(...),
-    redirect_uri: str = Query(...),
-    code_challenge: str = Query(...),
-    code_challenge_method: str = Query("S256"),
-    state: Optional[str] = Query(None),
-    scope: str = Query("mcp:tools mcp:export"),
+    response_type: str = Query(...), client_id: str = Query(...), redirect_uri: str = Query(...),
+    code_challenge: str = Query(...), code_challenge_method: str = Query("S256"),
+    state: Optional[str] = Query(None), scope: str = Query("mcp:tools mcp:export"),
 ) -> JSONResponse:
     try:
         issued = oauth_server.issue_authorization_code(
-            response_type=response_type,
-            client_id=client_id,
-            redirect_uri=redirect_uri,
-            code_challenge=code_challenge,
-            code_challenge_method=code_challenge_method,
-            state=state,
-            scope=scope,
+            response_type=response_type, client_id=client_id, redirect_uri=redirect_uri,
+            code_challenge=code_challenge, code_challenge_method=code_challenge_method, state=state, scope=scope,
         )
         return JSONResponse(status_code=200, content=issued)
     except ValueError as exc:
@@ -300,15 +259,11 @@ async def oauth_token(request: Request) -> JSONResponse:
     else:
         parsed_qs = parse_qs(raw_body, keep_blank_values=True)
         body = {k: (v[0] if v else "") for k, v in parsed_qs.items()}
-
     try:
         token_data = oauth_server.exchange_code_for_token(
-            grant_type=str(body.get("grant_type", "")),
-            code=str(body.get("code", "")),
-            client_id=str(body.get("client_id", "")),
-            redirect_uri=str(body.get("redirect_uri", "")),
-            code_verifier=str(body.get("code_verifier", "")),
-            refresh_token=str(body.get("refresh_token", "")),
+            grant_type=str(body.get("grant_type", "")), code=str(body.get("code", "")),
+            client_id=str(body.get("client_id", "")), redirect_uri=str(body.get("redirect_uri", "")),
+            code_verifier=str(body.get("code_verifier", "")), refresh_token=str(body.get("refresh_token", "")),
         )
         return JSONResponse(status_code=200, content=token_data)
     except ValueError as exc:
@@ -411,6 +366,37 @@ def api_extract_document(req: ExtractDocumentRequest, request: Request) -> Dict[
     return result.model_dump()
 
 
+def _process_uploaded_file_sync(raw_body: bytes, content_type: str, query_params: Dict[str, str], request: Request) -> Dict[str, Any]:
+    upload = parse_upload_from_request(raw_body, content_type, query_params)
+    is_prod, caller_ip, api_key = _is_production_runtime(request), extract_caller_ip(request), upload["api_key"]
+    ws = resolve_request_workspace(request, upload["workspace_id"], oauth_server=oauth_server, quota_manager=quota_manager, api_key=api_key)
+    quota_manager.check_available(ws, api_key=api_key, is_prod=is_prod, caller_ip=caller_ip)
+    reserved: Dict[str, Any] = {}
+    extracted_text, method = extract_invoice_text_from_upload(
+        upload["filename"], upload["file_bytes"],
+        before_vision_ocr=lambda: reserved.setdefault("state", quota_manager.consume_document(ws, api_key=api_key, is_prod=is_prod, caller_ip=caller_ip)),
+    )
+    doc_type = upload["document_type"] if upload["document_type"] in ("invoice", "receipt", "bank_statement", "auto") else "invoice"
+    parsed = extract_financial_document(ExtractDocumentRequest(raw_text=extracted_text, document_type=doc_type, currency_hint=upload["currency_hint"], strict_reconciliation=upload["strict_reconciliation"], workspace_id=ws, api_key=api_key))
+    quota_state = reserved.get("state") or quota_manager.consume_document(ws, api_key=api_key, is_prod=is_prod, caller_ip=caller_ip)
+    result = parsed.model_copy(update={"quota_state": quota_state}).model_dump()
+    result.update({"extracted_text": extracted_text, "extraction_method": method, "filename": Path(upload["filename"]).name[:120]})
+    return result
+
+
+@app.post("/api/extract-file")
+async def api_extract_uploaded_file(request: Request) -> Dict[str, Any]:
+    raw_body = await request.body()
+    try:
+        result = await anyio.to_thread.run_sync(_process_uploaded_file_sync, raw_body, request.headers.get("content-type", ""), dict(request.query_params), request)
+    except PermissionError as exc:
+        raise HTTPException(status_code=402, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    record_event(event_type="tool_call", source=detect_source(request.headers.get("user-agent", ""), path="/api/extract-file"), tool_name="extract_financial_documents", detail=f"file_{result['extraction_method']}")
+    return result
+
+
 @app.post("/api/reconcile")
 def api_reconcile_ledger(req: ReconcileLedgerRequest, request: Request) -> Dict[str, Any]:
     report = reconcile_invoices_with_bank_ledger(req)
@@ -421,6 +407,14 @@ def api_reconcile_ledger(req: ReconcileLedgerRequest, request: Request) -> Dict[
 
 @app.post("/api/export")
 def api_export_bundle(req: ExportBundleRequest, request: Request) -> Dict[str, Any]:
+    is_prod = _is_production_runtime(request)
+    api_key = req.api_key or request.query_params.get("api_key") or None
+    ws_hint = request.query_params.get("workspace_id") or req.workspace_id
+    ws = resolve_request_workspace(request, ws_hint, oauth_server=oauth_server, quota_manager=quota_manager, api_key=api_key)
+    try:
+        quota_manager.consume_export(ws, api_key=api_key, doc_count=len(req.documents), is_prod=is_prod)
+    except PermissionError as exc:
+        raise HTTPException(status_code=402, detail=str(exc)) from exc
     result = export_ledger_bundle(req)
     src = detect_source(request.headers.get("user-agent", ""), path="/api/export")
     record_event(event_type="tool_call", source=src, tool_name="export_ledger_bundle", detail=req.format)

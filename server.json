@@ -1,0 +1,18 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-10-17/server.schema.json",
+  "name": "io.github.mulak1/billtally-mcp",
+  "title": "BillTally — Bill & Invoice Math Checker",
+  "description": "Penny-exact invoice math verification, bank statement matching, and Excel/CSV ledger export.",
+  "version": "1.0.0",
+  "websiteUrl": "https://schemaextract-mcp-production.up.railway.app",
+  "repository": {
+    "url": "https://github.com/mulak1/billtally-mcp",
+    "source": "github"
+  },
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://schemaextract-mcp-production.up.railway.app/mcp"
+    }
+  ]
+}

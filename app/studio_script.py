@@ -169,16 +169,41 @@ STUDIO_CONTROLLER_JS = """
       showToast('Cleared bill text and batch queue. Paste or drop your own bill to check.');
     }
 
-    function readAndCheckFile(file) {
-      const reader = new FileReader();
-      reader.onload = async (e) => {
-        document.getElementById('raw-doc-input').value = String((e.target && e.target.result) || '');
-        const pill = document.getElementById('active-sample-pill');
+    async function readAndCheckFile(file) {
+      if (!file) return;
+      if (file.size > 5000000) {
+        showBannerError('File exceeds the 5 MB limit. Please upload a PDF, image, Excel, or CSV under 5 MB.');
+        return;
+      }
+      const prog = document.getElementById('upload-progress');
+      const pill = document.getElementById('active-sample-pill');
+      if (prog) { prog.removeAttribute('value'); prog.hidden = false; }
+      if (pill) pill.textContent = 'Extracting ' + file.name + '...';
+      setActivePresetUi('');
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('document_type', 'invoice');
+      if (CURRENT_API_KEY) fd.append('api_key', CURRENT_API_KEY);
+      try {
+        const res = await fetch('/api/extract-file', { method: 'POST', body: fd, signal: (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) ? AbortSignal.timeout(25000) : undefined });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          showBannerError(data.detail || data.error || ('Unable to extract file (HTTP ' + res.status + ').'));
+          await refreshQuota();
+          return;
+        }
+        document.getElementById('raw-doc-input').value = String(data.extracted_text || '');
         if (pill) pill.textContent = 'File: ' + file.name;
         updateLineCount(false);
-        await runExtractMcp();
-      };
-      reader.readAsText(file);
+        LAST_EXTRACTED = data;
+        renderExtractedTable(LAST_EXTRACTED);
+        await refreshQuota();
+        showToast('Extracted & checked ' + file.name + ' to the penny.');
+      } catch (err) {
+        showBannerError('Network error while uploading file: ' + (err && err.message ? err.message : String(err)));
+      } finally {
+        if (prog) prog.hidden = true;
+      }
     }
 
     async function loadPreset(id) {
@@ -193,7 +218,11 @@ STUDIO_CONTROLLER_JS = """
     async function runExtractMcp() {
       const rawText = (document.getElementById('raw-doc-input').value || '').trim();
       if (!rawText) {
-        showBannerError('Please paste supplier bill text or choose a .txt/.csv file first.');
+        showBannerError('Please drop a PDF/Excel/CSV/image file or paste supplier bill text first.');
+        return;
+      }
+      if (rawText.startsWith('%PDF-')) {
+        showBannerError('Raw PDF bytes detected in text box. Drop or select your .pdf file in the file dropzone above.');
         return;
       }
       const rpcReq = {
@@ -220,15 +249,9 @@ STUDIO_CONTROLLER_JS = """
     }
 
     function addCurrentToBatch() {
-      if (!LAST_EXTRACTED) {
-        showToast('Check a supplier bill first before adding it to your batch queue.');
-        return;
-      }
+      if (!LAST_EXTRACTED) { showToast('Check a supplier bill first before adding it to your batch queue.'); return; }
       const dup = BATCH_QUEUE.find(d => d.invoice_number === LAST_EXTRACTED.invoice_number && d.vendor === LAST_EXTRACTED.vendor);
-      if (dup) {
-        showToast('Duplicate bill warning: Bill #' + LAST_EXTRACTED.invoice_number + ' is already in your batch queue.');
-        return;
-      }
+      if (dup) { showToast('Duplicate bill warning: Bill #' + LAST_EXTRACTED.invoice_number + ' is already in your batch queue.'); return; }
       BATCH_QUEUE.push(LAST_EXTRACTED);
       renderBatchCounter();
       showToast('Added Bill #' + LAST_EXTRACTED.invoice_number + ' to batch queue (' + BATCH_QUEUE.length + ' total).');
@@ -236,9 +259,15 @@ STUDIO_CONTROLLER_JS = """
 
     function updateExportModeLabel() {
       const useCorr = document.getElementById('mode-corrected') && document.getElementById('mode-corrected').checked;
-      showToast(useCorr
-        ? 'Export mode set to: Verified true math total.'
-        : 'Export mode set to: Hold billed total for supplier credit note.');
+      showToast(useCorr ? 'Export mode set to: Verified true math total.' : 'Export mode set to: Hold billed total for supplier credit note.');
+    }
+
+    function copyTextSafe(text, okMsg) {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(() => showToast(okMsg)).catch(() => showToast('Clipboard unavailable. Select and copy manually.'));
+      } else {
+        showToast('Clipboard unavailable. Select and copy manually.');
+      }
     }
 
     function copyVerifiedSummary() {
@@ -254,25 +283,12 @@ STUDIO_CONTROLLER_JS = """
         'Verdict: ' + verdict,
         'Line Items & Tax: ' + d.line_items.length + ' line items · Sales Tax ' + fmtMoney(d.tax) + ' (' + Number(d.effective_tax_rate_pct || 0).toFixed(2) + '%)'
       ].join('\\n');
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(summary)
-          .then(() => showToast('Copied 5-line verified bill summary for Slack / Email.'))
-          .catch(() => showToast('Clipboard unavailable. Select and copy the summary manually.'));
-      } else {
-        showToast('Clipboard unavailable. Select and copy the summary manually.');
-      }
+      copyTextSafe(summary, 'Copied 5-line verified bill summary for Slack / Email.');
     }
 
     function copySupplierNote() {
       const box = document.getElementById('supplier-note-box');
-      if (!box || !box.value) return;
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(box.value)
-          .then(() => showToast('Copied polite supplier dispute email to your clipboard.'))
-          .catch(() => showToast('Clipboard unavailable. Select and copy the note manually.'));
-      } else {
-        showToast('Clipboard unavailable. Select and copy the note manually.');
-      }
+      if (box && box.value) copyTextSafe(box.value, 'Copied polite supplier dispute email to your clipboard.');
     }
 
     async function runBankReconciliationPreset(scrollToCard) {
@@ -333,29 +349,35 @@ STUDIO_CONTROLLER_JS = """
     }
 
     async function exportBundle(fmt) {
+      /* Uses /api/export (server-gated equivalent of MCP export_ledger_bundle) */
       if (!LAST_EXTRACTED) await runExtractMcp();
       if (!LAST_EXTRACTED) return;
       const catEl = document.getElementById('category-select');
       if (catEl) LAST_EXTRACTED.suggested_category = catEl.value;
       const docsToExport = BATCH_QUEUE.length > 0 ? BATCH_QUEUE : [LAST_EXTRACTED];
+      const freeExportsUsed = Number(safeGetStorage('bt_free_exports_used') || '0');
+      const upgradeHtml = 'Free tier includes 3 spreadsheet exports (up to 3 bills). <a href="https://buy.stripe.com/bJedR9cK12BN90903MfAc01" target="_blank" rel="noopener noreferrer" style="color:var(--positive); font-weight:600; text-decoration:underline;">Unlock $49.99 One-Time Pro Pass →</a>';
+      if (!CURRENT_API_KEY && (docsToExport.length > 3 || freeExportsUsed >= 3)) {
+        document.getElementById('download-status').innerHTML = upgradeHtml;
+        showToast('Unlock the $49.99 One-Time Pro Pass for unlimited multi-bill Excel & QuickBooks exports.');
+        return;
+      }
       const useCorrected = document.getElementById('mode-corrected') ? document.getElementById('mode-corrected').checked : false;
       const slug = String(LAST_EXTRACTED.invoice_number || 'checked_bills').toLowerCase();
-      const rpcReq = {
-        jsonrpc: "2.0", id: "studio-export-1", method: "tools/call",
-        params: {
-          name: "export_ledger_bundle",
-          arguments: { documents: docsToExport, reconciliation: LAST_RECON, format: fmt, bundle_name: slug + "_ledger", use_corrected_amounts: useCorrected }
-        }
-      };
+      const payload = { documents: docsToExport, reconciliation: LAST_RECON, format: fmt, bundle_name: slug + "_ledger", use_corrected_amounts: useCorrected, api_key: CURRENT_API_KEY };
       try {
-        const res = await fetch('/mcp', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(rpcReq) });
-        const rpcRes = await res.json();
-        if (!res.ok || !rpcRes.result || rpcRes.result.isError || !rpcRes.result.structuredContent) {
-          const errText = (rpcRes.result && rpcRes.result.content && rpcRes.result.content[0] && rpcRes.result.content[0].text) || 'Unable to generate spreadsheet export.';
-          showToast(errText);
+        const res = await fetch('/api/export', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), signal: (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) ? AbortSignal.timeout(25000) : undefined });
+        const out = await res.json().catch(() => ({}));
+        if (res.status === 402) {
+          document.getElementById('download-status').innerHTML = upgradeHtml;
+          showToast(out.detail || 'Free export limit reached. Unlock the $49.99 One-Time Pro Pass.');
           return;
         }
-        const out = rpcRes.result.structuredContent;
+        if (!res.ok || !out || !out.download_url) {
+          showToast(out.detail || 'Unable to generate spreadsheet export.');
+          return;
+        }
+        if (!CURRENT_API_KEY) safeSetStorage('bt_free_exports_used', String(freeExportsUsed + 1));
         const safeHref = safeDownloadHref(out.download_url);
         document.getElementById('download-status').innerHTML =
           'Your spreadsheet <strong>' + escHtml(out.filename) + '</strong> (' + Number(out.size_bytes) + ' bytes, SHA-256 verified) is ready: <a href="' + escHtml(safeHref) + '" style="color:var(--chart-3); text-decoration:underline;">Click here to download</a>';
@@ -421,6 +443,7 @@ STUDIO_CONTROLLER_JS = """
         fileInp.addEventListener('change', (ev) => {
           const file = ev.target && ev.target.files && ev.target.files[0];
           if (file) readAndCheckFile(file);
+          if (ev.target) ev.target.value = '';
         });
       }
 

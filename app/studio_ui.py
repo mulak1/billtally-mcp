@@ -80,8 +80,15 @@ def render_studio_html(csp_nonce: str = "") -> str:
     .btn.active-preset { border-color: var(--text); background: var(--text); color: #ffffff; }
     .btn-primary { background: var(--accent); color: #ffffff; border-color: var(--accent); }
     .btn-primary:hover { background: #2b2b2b; }
-    .dropzone { border: 1px dashed var(--control); border-radius: var(--radius-control); padding: 10px 12px; margin-bottom: 10px; display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; align-items: center; font-size: 12px; color: var(--muted); background: #fcfcfc; }
+    .dropzone { border: 1.5px dashed var(--control); border-radius: var(--radius-control); padding: 14px 16px; margin-bottom: 10px; display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-between; align-items: center; font-size: 12.5px; color: var(--text); background: #fcfcfc; transition: border-color 160ms ease-out, background-color 160ms ease-out; }
     .dropzone.drag-over { border-color: var(--chart-3); background: #f0f6ff; }
+    progress.upload-progress { appearance: none; border: 0 solid; overflow: clip; width: 100%; height: 6px; border-radius: 999px; background: var(--raised); margin-bottom: 10px; container-type: inline-size; --progress-bar-indeterminate-size: 30%; --progress-bar-indeterminate-animation-duration: 1.4s; }
+    progress.upload-progress[hidden] { display: none; }
+    progress.upload-progress::-webkit-progress-bar { background: transparent; }
+    progress.upload-progress::-webkit-progress-value { background: var(--positive); border-radius: 999px; animation: var(--progress-bar-animation, revert-rule); }
+    progress.upload-progress::-moz-progress-bar { background: var(--positive); border-radius: 999px; animation: var(--progress-bar-animation, revert-rule); }
+    progress.upload-progress:indeterminate { --progress-bar-animation: bt-progress-slide var(--progress-bar-indeterminate-animation-duration) infinite linear; }
+    @keyframes bt-progress-slide { from, to { inline-size: var(--progress-bar-indeterminate-size); margin-right: auto; } from { translate: -100%; } to { translate: 100cqi; } }
     .input-meta-bar { display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; align-items: center; margin-bottom: 6px; font-size: 12px; color: var(--muted); }
     textarea { width: 100%; min-height: 220px; border: 1px solid var(--control); border-radius: var(--radius-control); padding: 12px; font-family: var(--mono); font-size: 13px; color: var(--text); background: #fcfcfc; resize: vertical; margin-bottom: 12px; line-height: 1.55; }
     .banner { padding: 14px 16px; border-radius: var(--radius-control); font-size: 13.5px; margin-bottom: 14px; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
@@ -121,10 +128,12 @@ def render_studio_html(csp_nonce: str = "") -> str:
     @media (max-width: 768px), (pointer: coarse) {
       .btn, .btn-sm, .nav-item, select.input-select, .top-bar-links a, #pro-api-key-input { min-height: 44px; font-size: 16px; }
       .sidebar details > summary { min-height: 44px; display: flex; align-items: center; }
+      details.collapsible-card > summary, footer.site-footer a, #discrepancy-actions label { min-height: 44px; display: inline-flex; align-items: center; }
       textarea { font-size: 16px; }
     }
     @media (prefers-reduced-motion: reduce) {
-      .btn { transition: none; }
+      .btn, .dropzone { transition: none; }
+      progress.upload-progress:indeterminate { --progress-bar-animation: none; }
     }
     @media print {
       .sidebar, .top-bar-links, .steps-strip, .dropzone, .btn-row, .toast-bar, #bank-match, #input-card, .skip-link { display: none !important; }
@@ -180,10 +189,11 @@ def render_studio_html(csp_nonce: str = "") -> str:
 
       <div style="border-top:1px solid var(--border); padding-top:14px; font-size:12px;">
         <div style="color:var(--muted); margin-bottom:4px;">Monthly plan usage</div>
-        <div style="margin-bottom:8px; white-space:nowrap;">
+        <div style="margin-bottom:6px; white-space:nowrap;">
           <strong id="tier-name">Free Plan</strong> · <span id="quota-used">0</span> of <span id="quota-limit">15</span> bills checked
         </div>
-        <a id="sidebarUpgradeLink" class="btn btn-primary" href="https://buy.stripe.com/bJedR9cK12BN90903MfAc01" target="_blank" rel="noopener noreferrer" style="width:100%; justify-content:center; margin-bottom:8px;">Upgrade to Pro ($49.99 Pass) <span aria-hidden="true">→</span></a>
+        <div style="font-size:11.5px; color:var(--muted); margin-bottom:8px;">$49.99 One-Time Pro Pass · 5,000 bills/mo</div>
+        <a id="sidebarUpgradeLink" class="btn btn-primary" href="https://buy.stripe.com/bJedR9cK12BN90903MfAc01" target="_blank" rel="noopener noreferrer" style="width:100%; justify-content:center; margin-bottom:8px;">Unlock $49.99 One-Time Pro Pass <span aria-hidden="true">→</span></a>
         <details style="margin-bottom:8px;">
           <summary style="cursor:pointer; color:var(--muted); font-size:12px;">Have a Pro API key?</summary>
           <div style="margin-top:6px; display:flex; flex-direction:column; gap:6px;">
@@ -200,16 +210,15 @@ def render_studio_html(csp_nonce: str = "") -> str:
       <nav class="top-bar-links" aria-label="Company and documentation links">
         <a href="/about">About</a>
         <a href="/docs">Documentation</a>
-        <a href="/analytics">Live Analytics</a>
         <a href="/privacy">Privacy Policy</a>
         <a href="/terms">Terms</a>
-        <a id="headerUpgradeLink" href="https://buy.stripe.com/bJedR9cK12BN90903MfAc01" target="_blank" rel="noopener noreferrer" style="color:var(--positive); font-weight:600; display:inline-flex; align-items:center; gap:4px;">Upgrade to Pro ($49.99 Pass) <span aria-hidden="true">→</span></a>
+        <a id="headerUpgradeLink" href="https://buy.stripe.com/bJedR9cK12BN90903MfAc01" target="_blank" rel="noopener noreferrer" style="color:var(--positive); font-weight:600; display:inline-flex; align-items:center; gap:4px;">$49.99 One-Time Pro Pass <span aria-hidden="true">→</span></a>
       </nav>
       <header class="greeting-bar">
         <div>
           <h1 id="greeting-heading">Good morning. Welcome to your Bill &amp; Bank Math Check Desk</h1>
           <p class="greeting-sub">
-            Drop a file or paste any supplier bill, receipt, or monthly bank statement below. We check every line item
+            Drop any supplier PDF invoice, receipt photo, Excel workbook, or CSV statement below. We extract and verify every line item
             (Quantity × Unit Price) and sales tax to the penny before you pay the bill or export your spreadsheet.
           </p>
         </div>
@@ -221,17 +230,19 @@ def render_studio_html(csp_nonce: str = "") -> str:
       </header>
 
       <div class="trust-strip" role="note" aria-label="Privacy and math guarantee">
-        <span><strong>100% Penny-Exact Math:</strong> Every line item is verified with fixed-decimal arithmetic, never guessed.</span>
+        <span><strong>100% Penny-Exact Decimal Math:</strong> Fixed-decimal verification, never guessed.</span>
         <span>·</span>
-        <span><strong>Private &amp; Confidential:</strong> Bills are checked in memory and never used to train models.</span>
+        <span><strong>PDF, Photo, Excel &amp; CSV Ready:</strong> Zero manual re-typing.</span>
+        <span>·</span>
+        <span><strong>Zero-Training Privacy &amp; 100% Refund Guarantee:</strong> Checked in memory only.</span>
         <span>·</span>
         <span id="batch-counter-text"><strong>Batch Queue:</strong> 0 bills queued (exports active bill)</span>
       </div>
 
       <section class="steps-strip" aria-label="How this works in 3 plain steps">
         <div class="step-card">
-          <span class="step-num">1. Add or pick a bill</span>
-          Click a sample bill below, drop a <code>.txt</code> or <code>.csv</code> file, or paste lines from a PDF or email.
+          <span class="step-num">1. Drop a PDF, photo, or spreadsheet</span>
+          Drop a supplier <code>.pdf</code>, receipt photo (<code>.png/.jpg/.webp</code>), <code>.xlsx</code>, or <code>.csv</code> — or try a 1-click sample bill.
         </div>
         <div class="step-card">
           <span class="step-num">2. Instant penny verdict</span>
@@ -295,12 +306,16 @@ def render_studio_html(csp_nonce: str = "") -> str:
           </div>
 
           <div class="dropzone" id="dropzone">
-            <span>Drag &amp; drop a <code>.txt</code> or <code>.csv</code> file here, or choose from computer</span>
+            <div>
+              <div style="font-weight:500;">Drop supplier <code>.pdf</code>, receipt photo (<code>.png/.jpg/.webp</code>), <code>.xlsx</code>, or <code>.csv/.txt</code></div>
+              <div style="font-size:11.5px; color:var(--muted); margin-top:2px;">Auto-extracts &amp; verifies every line item on drop (up to 5 MB)</div>
+            </div>
             <label class="btn btn-sm file-upload-label" for="file-upload" style="cursor:pointer;">
-              Choose file (.txt / .csv)
-              <input type="file" id="file-upload" name="bill_file" accept=".txt,.csv" class="visually-hidden" />
+              Choose file (.pdf / .xlsx / photo / .csv)
+              <input type="file" id="file-upload" name="bill_file" accept=".pdf,.png,.jpg,.jpeg,.webp,.xlsx,.csv,.txt" class="visually-hidden" />
             </label>
           </div>
+          <progress id="upload-progress" class="upload-progress" max="100" hidden aria-label="Document extraction progress"></progress>
 
           <div class="input-meta-bar">
             <label for="raw-doc-input">Bill or statement lines (<span id="line-counter-badge">14 lines pasted · Ready to check</span>)</label>
@@ -371,7 +386,7 @@ def render_studio_html(csp_nonce: str = "") -> str:
 
       <footer class="site-footer">
         <div>
-          <div>BillTally · Founder &amp; Creator: Kader Mula · Support: <a href="mailto:mulak1@gmail.com">mulak1@gmail.com</a> · Tools: <code>extract_financial_documents</code>, <code>reconcile_invoices_with_bank_ledger</code>, <code>export_ledger_bundle</code></div>
+          <div>BillTally · Plain-English Bill &amp; Bank Math Check Desk · $49.99 One-Time Pro Pass · 100% Accuracy Refund Guarantee</div>
           <div style="font-size:11.5px; margin-top:4px;">BillTally provides deterministic arithmetic verification and spreadsheet formatting, not certified public accounting (CPA) or tax advice.</div>
         </div>
         <div style="display:flex; flex-wrap:wrap; gap:16px;">

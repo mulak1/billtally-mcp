@@ -179,6 +179,8 @@ class ExportBundleRequest(BaseModel):
         default=False,
         description="When True, exports verified math totals instead of overcharged billed figures.",
     )
+    workspace_id: str = Field(default="default-workspace", max_length=120)
+    api_key: Optional[str] = Field(default=None, max_length=160)
 
 
 class ExportBundleResult(BaseModel):

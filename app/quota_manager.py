@@ -14,6 +14,7 @@ import time
 from typing import Any, Dict, Optional, Tuple
 
 FREE_MONTHLY_LIMIT = 15
+FREE_EXPORT_LIMIT = 3
 PRO_MONTHLY_LIMIT = 5000
 MAX_FREE_DOCS_PER_IP_MONTHLY = 60
 PRO_PRICE_USD = 29
@@ -41,6 +42,7 @@ class QuotaManager:
         self._pro_keys: "OrderedDict[str, str]" = OrderedDict()
         self._redeemed_sessions: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
         self._ip_free_counts: "OrderedDict[str, int]" = OrderedDict()
+        self._free_export_counts: "OrderedDict[str, int]" = OrderedDict()
 
     def _sign_pro_key(self, raw_token: str) -> str:
         secret = os.environ.get("ADMIN_API_SECRET", "").strip()
@@ -81,6 +83,7 @@ class QuotaManager:
             "api_key": api_key,
         }
         self._free_workspaces.pop(ws_id, None)
+        self._free_export_counts.pop(ws_id, None)
         bounded_put(self._pro_workspaces, ws_id, upgraded, MAX_WORKSPACES)
         return copy.deepcopy(upgraded)
 
@@ -219,6 +222,29 @@ class QuotaManager:
             ip_bucket = f"{clean_ip}:{time.strftime('%Y-%m', time.gmtime())}"
             bounded_put(self._ip_free_counts, ip_bucket, self._ip_free_counts.get(ip_bucket, 0) + 1, MAX_WORKSPACES)
         return copy.deepcopy(updated)
+
+    def consume_export(
+        self,
+        workspace_id: str = "default-workspace",
+        api_key: Optional[str] = None,
+        *,
+        doc_count: int = 1,
+        is_prod: bool = False,
+    ) -> Dict[str, Any]:
+        """Enforce the 3-export free preview cap (up to 3 bills per export) for non-Pro workspaces."""
+        current = self.get_status(workspace_id, api_key=api_key, is_prod=is_prod)
+        if current["tier"] == "pro":
+            return {**current, "exports_used": 0, "exports_limit": PRO_MONTHLY_LIMIT}
+        ws_id = current["workspace_id"]
+        used = self._free_export_counts.get(ws_id, 0)
+        if used >= FREE_EXPORT_LIMIT or doc_count > FREE_EXPORT_LIMIT:
+            raise PermissionError(
+                f"Free tier export limit reached ({used}/{FREE_EXPORT_LIMIT} spreadsheet exports; up to {FREE_EXPORT_LIMIT} bills per export). "
+                f"Unlock the ${PRO_STRIPE_PASS_USD:.2f} One-Time Pro Pass ({STRIPE_UPGRADE_URL}) for unlimited exports."
+            )
+        new_used = used + 1
+        bounded_put(self._free_export_counts, ws_id, new_used, MAX_WORKSPACES)
+        return {**current, "exports_used": new_used, "exports_limit": FREE_EXPORT_LIMIT}
 
     def upgrade_to_pro(self, workspace_id: str = "default-workspace") -> Dict[str, Any]:
         return self._apply_pro_upgrade(workspace_id, self._sign_pro_key(secrets.token_hex(12)))

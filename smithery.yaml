@@ -1,0 +1,17 @@
+runtime: "container"
+startCommand:
+  type: "http"
+  configSchema:
+    type: object
+    properties:
+      api_key:
+        type: string
+        title: "BillTally Pro API Key (Optional)"
+        description: "Optional se_pro_... API key for 5,000 bills/month (15 bills/month free without a key)."
+      endpointUrl:
+        type: string
+        default: "https://schemaextract-mcp-production.up.railway.app/mcp"
+        description: "Remote Streamable HTTP MCP endpoint URL."
+    required: []
+exampleConfig:
+  endpointUrl: "https://schemaextract-mcp-production.up.railway.app/mcp"
