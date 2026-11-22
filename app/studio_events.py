@@ -16,28 +16,43 @@ STUDIO_EVENTS_JS = """
         const txt = await f.text();
         const ta = document.getElementById('bank-csv-input');
         if (ta) ta.value = txt;
-        showToast('Loaded ' + f.name + ' locally. Click "Match My Bank Statement" to compare.');
+        LAST_RECON = null;
+        const reconBox = document.getElementById('bank-recon-container');
+        if (reconBox) reconBox.textContent = 'Loaded ' + f.name + '. Click "Download QuickBooks 3-Column CSV (.csv)" or "Match Against Checked Bill(s)".';
+        const pill = document.getElementById('bank-summary-pill');
+        if (pill) { pill.className = 'pill pill-ok'; pill.textContent = 'CSV loaded · Ready'; }
+        showToast('Loaded ' + f.name + ' locally. Click "Download QuickBooks 3-Column CSV (.csv)" to convert.');
       } catch (_e) {
         showToast('Unable to read bank CSV file.');
       }
     }
 
     function bindStudioEvents() {
+      document.querySelectorAll('[data-scroll-target]').forEach(el => {
+        el.addEventListener('click', (ev) => {
+          ev.preventDefault();
+          const targetId = el.getAttribute('data-scroll-target');
+          const target = targetId ? document.getElementById(targetId) : null;
+          if (!target) return;
+          if (target.tagName === 'DETAILS') target.open = true;
+          target.scrollIntoView({ behavior: scrollBehaviorPref(), block: 'start' });
+        });
+      });
       document.querySelectorAll('[data-preset]').forEach(el => {
         el.addEventListener('click', (ev) => {
-          if (el.tagName === 'BUTTON') ev.preventDefault();
+          ev.preventDefault();
           loadPreset(el.getAttribute('data-preset'));
         });
       });
       document.querySelectorAll('[data-recon-scroll]').forEach(el => {
         el.addEventListener('click', (ev) => {
-          if (el.tagName === 'BUTTON') ev.preventDefault();
+          ev.preventDefault();
           runBankReconciliationPreset(el.getAttribute('data-recon-scroll') === 'true');
         });
       });
       document.querySelectorAll('[data-export-format]').forEach(el => {
         el.addEventListener('click', (ev) => {
-          if (el.tagName === 'BUTTON') ev.preventDefault();
+          ev.preventDefault();
           exportBundle(el.getAttribute('data-export-format'));
         });
       });
@@ -46,9 +61,9 @@ STUDIO_EVENTS_JS = """
       const copySumBtn = document.getElementById('copy-summary-btn');
       if (copySumBtn) copySumBtn.addEventListener('click', copyVerifiedSummary);
       const dismissBtn = document.getElementById('toast-dismiss-btn');
-      if (dismissBtn) dismissBtn.addEventListener('click', () => { document.getElementById('toast-bar').style.display = 'none'; });
+      if (dismissBtn) dismissBtn.addEventListener('click', () => { document.getElementById('toast-bar').classList.remove('is-visible'); });
       const clearBtn = document.getElementById('clear-input-btn');
-      if (clearBtn) clearBtn.addEventListener('click', clearInput);
+      if (clearBtn) clearBtn.addEventListener('click', () => clearInput());
       const wipeBtn = document.getElementById('wipe-session-btn');
       if (wipeBtn) wipeBtn.addEventListener('click', wipeSessionNow);
       const runBtn = document.getElementById('run-extract-btn');
@@ -63,6 +78,8 @@ STUDIO_EVENTS_JS = """
       if (catSel) catSel.addEventListener('change', () => safeSetStorage('bt_pref_category', catSel.value));
       const reconBtn = document.getElementById('run-recon-btn');
       if (reconBtn) reconBtn.addEventListener('click', () => runBankReconciliationPreset(false));
+      const bankQboBtn = document.getElementById('export-bank-qbo-btn');
+      if (bankQboBtn) bankQboBtn.addEventListener('click', exportBankCsvToQbo);
       const customReconBtn = document.getElementById('run-custom-recon-btn');
       if (customReconBtn) customReconBtn.addEventListener('click', runCustomBankReconciliation);
       const bankCsvFile = document.getElementById('bank-csv-file');
@@ -109,6 +126,16 @@ STUDIO_EVENTS_JS = """
       setGreetingByHour();
       bindStudioEvents();
       renderBatchCounter();
+      const params = new URLSearchParams(window.location.search || '');
+      const verticalKey = (params.get('vertical') || '').trim().toLowerCase();
+      const modeParam = (params.get('mode') || '').trim().toLowerCase();
+      if (modeParam === 'upload') {
+        clearInput({ focusRaw: verticalKey !== 'bank-statement-to-qbo-csv', silent: true });
+        if (verticalKey === 'bank-statement-to-qbo-csv') {
+          const detailsEl = document.getElementById('bank-match');
+          if (detailsEl) detailsEl.open = true;
+        }
+      }
       const savedKey = safeGetStorage('bt_pro_api_key');
       if (savedKey) CURRENT_API_KEY = savedKey;
       try {
@@ -119,7 +146,6 @@ STUDIO_EVENTS_JS = """
         }
       } catch (_e) { /* offline fallback */ }
 
-      const params = new URLSearchParams(window.location.search || '');
       const sid = params.get('session_id') || params.get('checkout_session_id') || '';
       if (sid.startsWith('cs_')) {
         await activatePaidProSession(sid);
@@ -132,9 +158,18 @@ STUDIO_EVENTS_JS = """
         if (mb) mb.checked = true;
       }
 
-      const verticalKey = (params.get('vertical') || '').trim().toLowerCase();
       const vCfg = VERTICAL_ROUTES[verticalKey];
-      if (vCfg) {
+      if (modeParam === 'upload' && verticalKey === 'bank-statement-to-qbo-csv') {
+        const detailsEl = document.getElementById('bank-match');
+        if (detailsEl) {
+          detailsEl.open = true;
+          detailsEl.scrollIntoView({ behavior: scrollBehaviorPref(), block: 'start' });
+        }
+        const bankInp = document.getElementById('bank-csv-input');
+        if (bankInp) bankInp.focus();
+      } else if (modeParam === 'upload') {
+        /* already cleared synchronously above */
+      } else if (vCfg) {
         await loadPreset(vCfg.preset);
         if (vCfg.openRecon) await runBankReconciliationPreset(true);
       } else {

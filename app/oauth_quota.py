@@ -9,9 +9,10 @@ import copy
 import hashlib
 import os
 import secrets
+import threading
 import time
 from typing import Any, Dict, List, Optional
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 from app.quota_manager import (
     CHECK2QBO_COMPANION_URL,
@@ -143,15 +144,29 @@ def compute_s256_challenge(code_verifier: str) -> str:
 
 
 class OAuth21Server:
-    """Bounded, TTL-enforced OAuth 2.1 + S256 PKCE provider for MCP connectors."""
+    """Bounded, thread-safe, TTL-enforced OAuth 2.1 + S256 PKCE provider for MCP connectors."""
 
     def __init__(self, base_url: str = "http://localhost:8791") -> None:
+        self._lock = threading.RLock()
         self._base_url = base_url.rstrip("/")
         self._auth_codes: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
         self._tokens: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
         self._refresh_tokens: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
-        self._registered_clients: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+        self._registered_clients: "OrderedDict[str, Dict[str, Any]]" = OrderedDict(
+            {
+                "claude-connector-client": {
+                    "client_id": "claude-connector-client",
+                    "client_name": "Claude Connector",
+                    "redirect_uris": ["https://claude.ai/api/mcp/auth_callback"],
+                    "grant_types": ["authorization_code", "refresh_token"],
+                    "response_types": ["code"],
+                    "token_endpoint_auth_method": "none",
+                    "client_id_issued_at": 0,
+                }
+            }
+        )
         self._ip_registrations: "OrderedDict[str, int]" = OrderedDict()
+        self._ip_authorizations: "OrderedDict[str, int]" = OrderedDict()
 
     def _prune_expired(self) -> None:
         now = int(time.time())
@@ -183,28 +198,29 @@ class OAuth21Server:
         *,
         caller_ip: str = "",
     ) -> Dict[str, Any]:
-        clean_ip = (caller_ip or "").strip()
-        if clean_ip and clean_ip not in LOCAL_IPS:
-            bucket = f"{clean_ip}:{time.strftime('%Y-%m-%d-%H', time.gmtime())}"
-            used = self._ip_registrations.get(bucket, 0)
-            if used >= MAX_OAUTH_CLIENTS_PER_IP_HOURLY:
-                raise ValueError("Too many OAuth client registrations from this IP; retry next hour.")
-            _bounded_put(self._ip_registrations, bucket, used + 1, MAX_OAUTH_RECORDS)
+        with self._lock:
+            clean_ip = (caller_ip or "").strip()
+            if clean_ip and clean_ip not in LOCAL_IPS:
+                bucket = f"{clean_ip}:{time.strftime('%Y-%m-%d-%H', time.gmtime())}"
+                used = self._ip_registrations.get(bucket, 0)
+                if used >= MAX_OAUTH_CLIENTS_PER_IP_HOURLY:
+                    raise ValueError("Too many OAuth client registrations from this IP; retry next hour.")
+                _bounded_put(self._ip_registrations, bucket, used + 1, MAX_OAUTH_RECORDS)
 
-        raw_uris = list(redirect_uris or ["https://claude.ai/api/mcp/auth_callback"])[:10]
-        validated_uris = [_validate_redirect_uri(u) for u in raw_uris]
-        client_id = f"se_client_{secrets.token_hex(8)}"
-        record = {
-            "client_id": client_id,
-            "client_name": (client_name or "").strip()[:120] or "MCP Assistant Client",
-            "redirect_uris": validated_uris,
-            "grant_types": ["authorization_code", "refresh_token"],
-            "response_types": ["code"],
-            "token_endpoint_auth_method": "none",
-            "client_id_issued_at": int(time.time()),
-        }
-        _bounded_put(self._registered_clients, client_id, record, MAX_OAUTH_RECORDS)
-        return copy.deepcopy(record)
+            raw_uris = list(redirect_uris or ["https://claude.ai/api/mcp/auth_callback"])[:10]
+            validated_uris = [_validate_redirect_uri(u) for u in raw_uris]
+            client_id = f"se_client_{secrets.token_hex(8)}"
+            record = {
+                "client_id": client_id,
+                "client_name": (client_name or "").strip()[:120] or "MCP Assistant Client",
+                "redirect_uris": validated_uris,
+                "grant_types": ["authorization_code", "refresh_token"],
+                "response_types": ["code"],
+                "token_endpoint_auth_method": "none",
+                "client_id_issued_at": int(time.time()),
+            }
+            _bounded_put(self._registered_clients, client_id, record, MAX_OAUTH_RECORDS)
+            return copy.deepcopy(record)
 
     def issue_authorization_code(
         self,
@@ -216,54 +232,69 @@ class OAuth21Server:
         code_challenge_method: str = "S256",
         state: Optional[str] = None,
         scope: str = "mcp:tools mcp:export",
+        caller_ip: str = "",
     ) -> Dict[str, Any]:
-        self._prune_expired()
-        if response_type != "code":
-            raise ValueError("Unsupported response_type; OAuth 2.1 requires 'code'.")
-        if code_challenge_method.upper() != "S256":
-            raise ValueError("OAuth 2.1 requires code_challenge_method='S256'.")
-        cid = client_id.strip()
-        if not cid or len(code_challenge.strip()) < 16:
-            raise ValueError("Missing or invalid client_id or code_challenge.")
+        with self._lock:
+            self._prune_expired()
+            clean_ip = (caller_ip or "").strip()
+            if clean_ip and clean_ip not in LOCAL_IPS:
+                bucket = f"{clean_ip}:{time.strftime('%Y-%m-%d-%H', time.gmtime())}"
+                used = self._ip_authorizations.get(bucket, 0)
+                if used >= MAX_OAUTH_CLIENTS_PER_IP_HOURLY * 4:
+                    raise ValueError("Too many OAuth authorization requests from this IP; retry next hour.")
+                _bounded_put(self._ip_authorizations, bucket, used + 1, MAX_OAUTH_RECORDS)
+            if response_type != "code":
+                raise ValueError("Unsupported response_type; OAuth 2.1 requires 'code'.")
+            if code_challenge_method.upper() != "S256":
+                raise ValueError("OAuth 2.1 requires code_challenge_method='S256'.")
+            cid = client_id.strip()
+            if not cid or len(code_challenge.strip()) < 16:
+                raise ValueError("Missing or invalid client_id or code_challenge.")
 
-        clean_redirect = _validate_redirect_uri(redirect_uri)
-        registered = self._registered_clients.get(cid)
-        if registered and registered.get("redirect_uris") and clean_redirect not in registered["redirect_uris"]:
-            raise ValueError("redirect_uri does not match registered client redirect_uris.")
+            clean_redirect = _validate_redirect_uri(redirect_uri)
+            registered = self._registered_clients.get(cid)
+            if registered is None:
+                raise ValueError("Unknown or unregistered client_id. Register via /oauth/register first.")
+            if registered.get("redirect_uris") and clean_redirect not in registered["redirect_uris"]:
+                raise ValueError("redirect_uri does not match registered client redirect_uris.")
 
-        now = int(time.time())
-        code = f"se_auth_{secrets.token_urlsafe(24)}"
-        record = {
-            "code": code,
-            "client_id": cid,
-            "subject_id": secrets.token_hex(8),
-            "redirect_uri": clean_redirect,
-            "code_challenge": code_challenge.strip(),
-            "code_challenge_method": "S256",
-            "scope": scope,
-            "state": state,
-            "created_at": now,
-            "expires_at": now + AUTH_CODE_TTL_SEC,
-            "used": False,
-        }
-        _bounded_put(self._auth_codes, code, record, MAX_OAUTH_RECORDS)
-        redirect_target = f"{clean_redirect}?code={code}" + (f"&state={state}" if state else "")
-        return {
-            "code": code,
-            "state": state,
-            "client_id": cid,
-            "redirect_uri": clean_redirect,
-            "redirect_target": redirect_target,
-            "code_challenge_method": "S256",
-            "expires_in": AUTH_CODE_TTL_SEC,
-        }
+            now = int(time.time())
+            code = f"se_auth_{secrets.token_urlsafe(24)}"
+            record = {
+                "code": code,
+                "client_id": cid,
+                "subject_id": secrets.token_hex(8),
+                "redirect_uri": clean_redirect,
+                "code_challenge": code_challenge.strip(),
+                "code_challenge_method": "S256",
+                "scope": scope,
+                "state": state,
+                "created_at": now,
+                "expires_at": now + AUTH_CODE_TTL_SEC,
+                "used": False,
+            }
+            _bounded_put(self._auth_codes, code, record, MAX_OAUTH_RECORDS)
+            q_params = {"code": code}
+            if state:
+                q_params["state"] = str(state)
+            redirect_target = f"{clean_redirect}?{urlencode(q_params)}"
+            return {
+                "code": code,
+                "state": state,
+                "client_id": cid,
+                "redirect_uri": clean_redirect,
+                "redirect_target": redirect_target,
+                "code_challenge_method": "S256",
+                "expires_in": AUTH_CODE_TTL_SEC,
+            }
 
     def validate_access_token(self, token: str) -> Optional[Dict[str, Any]]:
-        self._prune_expired()
-        rec = self._tokens.get((token or "").strip())
-        if not rec or int(time.time()) > rec.get("expires_at", 0):
-            return None
-        return rec
+        with self._lock:
+            self._prune_expired()
+            rec = self._tokens.get((token or "").strip())
+            if not rec or int(time.time()) > rec.get("expires_at", 0):
+                return None
+            return dict(rec)
 
     def _issue_token_pair(self, *, client_id: str, scope: str, subject_id: str, now: int) -> Dict[str, Any]:
         access_token = f"se_mcp_live_{secrets.token_urlsafe(28)}"
@@ -295,46 +326,47 @@ class OAuth21Server:
         code_verifier: str = "",
         refresh_token: str = "",
     ) -> Dict[str, Any]:
-        self._prune_expired()
-        now = int(time.time())
+        with self._lock:
+            self._prune_expired()
+            now = int(time.time())
 
-        if grant_type == "refresh_token":
-            ref_key = refresh_token.strip()
-            ref_record = self._refresh_tokens.get(ref_key)
-            if not ref_record or now > ref_record.get("expires_at", 0):
+            if grant_type == "refresh_token":
+                ref_key = refresh_token.strip()
+                ref_record = self._refresh_tokens.get(ref_key)
+                if not ref_record or now > ref_record.get("expires_at", 0):
+                    self._refresh_tokens.pop(ref_key, None)
+                    raise ValueError("Invalid or expired refresh_token.")
+                if client_id.strip() and ref_record["client_id"] != client_id.strip():
+                    raise ValueError("client_id mismatch on refresh_token.")
                 self._refresh_tokens.pop(ref_key, None)
-                raise ValueError("Invalid or expired refresh_token.")
-            if client_id.strip() and ref_record["client_id"] != client_id.strip():
-                raise ValueError("client_id mismatch on refresh_token.")
-            self._refresh_tokens.pop(ref_key, None)
+                return self._issue_token_pair(
+                    client_id=ref_record["client_id"],
+                    scope=ref_record["scope"],
+                    subject_id=ref_record.get("subject_id") or ref_record["client_id"],
+                    now=now,
+                )
+
+            if grant_type != "authorization_code":
+                raise ValueError("Unsupported grant_type; expected 'authorization_code' or 'refresh_token'.")
+            record = self._auth_codes.get(code)
+            if not record or now > record.get("expires_at", 0):
+                self._auth_codes.pop(code, None)
+                raise ValueError("Invalid or expired authorization code.")
+            if record.get("used"):
+                raise ValueError("Authorization code has already been redeemed.")
+            if record["client_id"] != client_id.strip():
+                raise ValueError("client_id mismatch.")
+            if record["redirect_uri"] != redirect_uri.strip():
+                raise ValueError("redirect_uri mismatch.")
+            if not code_verifier or len(code_verifier.strip()) < 20:
+                raise ValueError("Invalid PKCE code_verifier length.")
+            if not secrets.compare_digest(compute_s256_challenge(code_verifier.strip()), record["code_challenge"]):
+                raise ValueError("PKCE S256 verification failed: code_verifier does not match code_challenge.")
+
+            record["used"] = True
             return self._issue_token_pair(
-                client_id=ref_record["client_id"],
-                scope=ref_record["scope"],
-                subject_id=ref_record.get("subject_id") or ref_record["client_id"],
+                client_id=client_id.strip(),
+                scope=record["scope"],
+                subject_id=record.get("subject_id") or client_id.strip(),
                 now=now,
             )
-
-        if grant_type != "authorization_code":
-            raise ValueError("Unsupported grant_type; expected 'authorization_code' or 'refresh_token'.")
-        record = self._auth_codes.get(code)
-        if not record or now > record.get("expires_at", 0):
-            self._auth_codes.pop(code, None)
-            raise ValueError("Invalid or expired authorization code.")
-        if record.get("used"):
-            raise ValueError("Authorization code has already been redeemed.")
-        if record["client_id"] != client_id.strip():
-            raise ValueError("client_id mismatch.")
-        if record["redirect_uri"] != redirect_uri.strip():
-            raise ValueError("redirect_uri mismatch.")
-        if not code_verifier or len(code_verifier.strip()) < 20:
-            raise ValueError("Invalid PKCE code_verifier length.")
-        if not secrets.compare_digest(compute_s256_challenge(code_verifier.strip()), record["code_challenge"]):
-            raise ValueError("PKCE S256 verification failed: code_verifier does not match code_challenge.")
-
-        record["used"] = True
-        return self._issue_token_pair(
-            client_id=client_id.strip(),
-            scope=record["scope"],
-            subject_id=record.get("subject_id") or client_id.strip(),
-            now=now,
-        )

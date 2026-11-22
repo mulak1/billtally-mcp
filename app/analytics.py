@@ -10,10 +10,12 @@ from collections import deque
 from datetime import datetime, timezone
 import html
 import re
+import threading
 from typing import Any, Deque, Dict
 
 from app.studio_pages import SHARED_PAGE_STYLE
 
+_ANALYTICS_LOCK = threading.Lock()
 _SECRET_DETAIL_RE = re.compile(
     r"(_[0-9a-f]{16,64}(?=\.[a-z0-9]+$|$)|\bse_pro_[A-Za-z0-9_]+\b)",
     re.IGNORECASE,
@@ -39,6 +41,7 @@ _BY_TOOL: Dict[str, int] = {
     "extract_financial_documents": 0,
     "reconcile_invoices_with_bank_ledger": 0,
     "export_ledger_bundle": 0,
+    "audit_and_export_pack": 0,
 }
 
 _RECENT_EVENTS: Deque[Dict[str, str]] = deque(maxlen=50)
@@ -53,7 +56,7 @@ def detect_source(user_agent: str, path: str = "", client_name: str = "") -> str
     if "chatgpt" in ua or "openai" in ua or "gpt" in cn or "/chatgpt" in path:
         return "ChatGPT"
     if path.startswith("/mcp"):
-        return "Claude" if not ua or "python" not in ua else "Other MCP Client"
+        return "Other MCP Client"
     return "Web Desk"
 
 
@@ -64,49 +67,50 @@ def record_event(
     tool_name: str = "-",
     detail: str = "",
 ) -> None:
-    """Record a privacy-safe telemetry event in memory."""
-    _COUNTERS["total_events"] += 1
-    if source in _BY_SOURCE:
-        _BY_SOURCE[source] += 1
-    else:
-        _BY_SOURCE["Other MCP Client"] += 1
-
-    if event_type == "mcp_connect":
-        _COUNTERS["mcp_connections"] += 1
-    elif event_type == "tool_call":
-        _COUNTERS["tool_calls_total"] += 1
-        if tool_name in _BY_TOOL:
-            _BY_TOOL[tool_name] += 1
-    elif event_type == "spreadsheet_download":
-        _COUNTERS["spreadsheet_downloads"] += 1
-    elif event_type == "page_view":
-        _COUNTERS["web_page_views"] += 1
-    elif event_type == "pro_unlock":
-        _COUNTERS["pro_unlocks"] += 1
-
+    """Record a privacy-safe telemetry event in memory (thread-safe)."""
     safe_tool = str(tool_name or "-")[:80]
     scrubbed_detail = _SECRET_DETAIL_RE.sub("_[redacted]", str(detail or "-"))
     safe_detail = scrubbed_detail[:80]
-    _RECENT_EVENTS.appendleft(
-        {
-            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
-            "source": str(source or "Web Desk")[:40],
-            "event": str(event_type or "-")[:40],
-            "tool": safe_tool,
-            "detail": safe_detail,
-        }
-    )
+    ev_row = {
+        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+        "source": str(source or "Web Desk")[:40],
+        "event": str(event_type or "-")[:40],
+        "tool": safe_tool,
+        "detail": safe_detail,
+    }
+    with _ANALYTICS_LOCK:
+        _COUNTERS["total_events"] += 1
+        if source in _BY_SOURCE:
+            _BY_SOURCE[source] += 1
+        else:
+            _BY_SOURCE["Other MCP Client"] += 1
+
+        if event_type == "mcp_connect":
+            _COUNTERS["mcp_connections"] += 1
+        elif event_type == "tool_call":
+            _COUNTERS["tool_calls_total"] += 1
+            if tool_name in _BY_TOOL:
+                _BY_TOOL[tool_name] += 1
+        elif event_type == "spreadsheet_download":
+            _COUNTERS["spreadsheet_downloads"] += 1
+        elif event_type == "page_view":
+            _COUNTERS["web_page_views"] += 1
+        elif event_type == "pro_unlock":
+            _COUNTERS["pro_unlocks"] += 1
+
+        _RECENT_EVENTS.appendleft(ev_row)
 
 
 def get_analytics_snapshot() -> Dict[str, Any]:
     """Return current telemetry counters and recent anonymized events."""
-    return {
-        "service": "BillTally",
-        "counters": dict(_COUNTERS),
-        "by_source": dict(_BY_SOURCE),
-        "by_tool": dict(_BY_TOOL),
-        "recent_events": list(_RECENT_EVENTS),
-    }
+    with _ANALYTICS_LOCK:
+        return {
+            "service": "BillTally",
+            "counters": dict(_COUNTERS),
+            "by_source": dict(_BY_SOURCE),
+            "by_tool": dict(_BY_TOOL),
+            "recent_events": list(_RECENT_EVENTS),
+        }
 
 
 def render_analytics_html() -> str:
@@ -129,6 +133,7 @@ def render_analytics_html() -> str:
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="robots" content="noindex, nofollow" />
   <title>Live Analytics (Claude, ChatGPT &amp; Web) | BillTally</title>
   {SHARED_PAGE_STYLE}
   <style>
@@ -166,6 +171,7 @@ def render_analytics_html() -> str:
       <div class="stat-card"><div class="stat-val">{tools.get('extract_financial_documents', 0)}</div><div class="stat-lbl">Check Supplier Bill Math</div></div>
       <div class="stat-card"><div class="stat-val">{tools.get('reconcile_invoices_with_bank_ledger', 0)}</div><div class="stat-lbl">Match Bank Statement</div></div>
       <div class="stat-card"><div class="stat-val">{tools.get('export_ledger_bundle', 0)}</div><div class="stat-lbl">Export Excel / CSV Bundle</div></div>
+      <div class="stat-card"><div class="stat-val">{tools.get('audit_and_export_pack', 0)}</div><div class="stat-lbl">1-Call Audit &amp; Export Pack</div></div>
     </div>
 
     <h2>Recent Activity Feed (Last 50 Events)</h2>

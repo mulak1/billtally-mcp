@@ -5,12 +5,48 @@ Geist & Geist Mono tabular numerals, <1% chroma budget reserved for verified/dis
 """
 
 import html
+import json
 from app.studio_script import STUDIO_CLIENT_JS
+from app.vertical_pages import render_gtag_head
 
 
-def render_studio_html(csp_nonce: str = "") -> str:
+def render_studio_html(csp_nonce: str = "", public_base_url: str = "") -> str:
     """Return the complete HTML document for the SchemaExtract Accounting Workbench."""
     nonce_attr = f' nonce="{html.escape(csp_nonce, quote=True)}"' if csp_nonce else ""
+    base = (public_base_url or "https://billtally.app").rstrip("/")
+    canonical = f"{base}/"
+    og_img = f"{base}/icon.png"
+    meta_desc = (
+        "Drop any supplier PDF invoice, receipt photo, Excel workbook, or bank statement CSV. "
+        "Verify every line item (Qty x Price) and sales tax to the penny, spot duplicate bank charges, "
+        "and export clean QuickBooks CSV or 3-tab Excel (.xlsx) files."
+    )
+    app_ld = json.dumps(
+        {
+            "@context": "https://schema.org",
+            "@type": "SoftwareApplication",
+            "name": "BillTally",
+            "applicationCategory": "FinanceApplication",
+            "operatingSystem": "Web",
+            "url": canonical,
+            "description": meta_desc,
+            "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"},
+        },
+        ensure_ascii=False,
+    ).replace("</", "<\\/")
+    gtag_html = render_gtag_head(csp_nonce)
+    seo_head = (
+        f'  <meta name="description" content="{html.escape(meta_desc, quote=True)}" />\n'
+        f'  <link rel="canonical" href="{html.escape(canonical, quote=True)}" />\n'
+        f'  <meta property="og:type" content="website" />\n'
+        f'  <meta property="og:title" content="BillTally: Bill Math Checker, Bank Statement Matcher &amp; Spreadsheet Exporter" />\n'
+        f'  <meta property="og:description" content="{html.escape(meta_desc, quote=True)}" />\n'
+        f'  <meta property="og:url" content="{html.escape(canonical, quote=True)}" />\n'
+        f'  <meta property="og:image" content="{html.escape(og_img, quote=True)}" />\n'
+        f'  <meta name="twitter:card" content="summary" />\n'
+        f'  <script type="application/ld+json">{app_ld}</script>\n'
+        f"{gtag_html}\n"
+    )
     return (
         """<!DOCTYPE html>
 <html lang="en">
@@ -19,7 +55,9 @@ def render_studio_html(csp_nonce: str = "") -> str:
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="color-scheme" content="light" />
   <title>BillTally: Bill Math Checker, Bank Statement Matcher &amp; Spreadsheet Exporter</title>
-  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+"""
+        + seo_head
+        + """  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <link rel="icon" type="image/png" href="/icon.png" />
   <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -110,7 +148,8 @@ def render_studio_html(csp_nonce: str = "") -> str:
     select.input-select { min-height: 36px; width: 100%; border: 1px solid var(--control); border-radius: var(--radius-control); padding: 0 8px; font-family: var(--sans); font-size: 14px; background: var(--surface); color: var(--text); }
     details.collapsible-card > summary { list-style: none; cursor: pointer; display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; align-items: center; font-weight: 500; font-size: 15px; min-height: 36px; }
     details.collapsible-card > summary::-webkit-details-marker { display: none; }
-    .toast-bar { display: none; padding: 10px 14px; border-radius: var(--radius-control); background: #141414; color: #ffffff; font-size: 13px; font-weight: 500; margin-bottom: 14px; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+    .toast-bar { display: flex; opacity: 0; visibility: hidden; pointer-events: none; position: fixed; bottom: 16px; right: 16px; z-index: 90; max-width: min(440px, calc(100vw - 32px)); padding: 10px 14px; border-radius: var(--radius-control); background: #141414; color: #ffffff; font-size: 13px; font-weight: 500; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18); transition: opacity 160ms ease-out; }
+    .toast-bar.is-visible { opacity: 1; visibility: visible; pointer-events: auto; }
     .top-bar-links { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 12px 18px; padding-bottom: 14px; margin-bottom: 18px; border-bottom: 1px solid var(--border); font-size: 13px; }
     .top-bar-links a { color: var(--muted); text-decoration: none; font-weight: 500; display: inline-flex; align-items: center; min-height: 32px; }
     .top-bar-links a:hover { color: var(--text); text-decoration: underline; }
@@ -132,7 +171,7 @@ def render_studio_html(csp_nonce: str = "") -> str:
       textarea { font-size: 16px; }
     }
     @media (prefers-reduced-motion: reduce) {
-      .btn, .dropzone { transition: none; }
+      .btn, .dropzone, .toast-bar { transition: none; }
       progress.upload-progress:indeterminate { --progress-bar-animation: none; }
     }
     @media print {
@@ -173,9 +212,9 @@ def render_studio_html(csp_nonce: str = "") -> str:
           </div>
         </div>
         <div class="nav-group-label">Daily bookkeeping</div>
-        <a class="nav-item active" id="nav-bill" href="#workbench" data-preset="messy_saas_invoice">1. Check a supplier bill</a>
-        <a class="nav-item" id="nav-bank" href="#bank-match" data-recon-scroll="true">2. Match bank statement</a>
-        <a class="nav-item" id="nav-export" href="#export-bar" data-export-format="xlsx">3. Export spreadsheet (.xlsx)</a>
+        <a class="nav-item active" id="nav-bill" href="#input-card" data-scroll-target="input-card">1. Check a supplier bill</a>
+        <a class="nav-item" id="nav-bank" href="#bank-match" data-scroll-target="bank-match">2. Match bank statement</a>
+        <a class="nav-item" id="nav-export" href="#export-bar" data-scroll-target="export-bar">3. Export spreadsheet (.xlsx)</a>
         <div class="nav-group-label">Sample bills to try</div>
         <a class="nav-item" id="side-messy_saas_invoice" href="#workbench" data-preset="messy_saas_invoice">Bakery supply bill (Balanced)</a>
         <a class="nav-item" id="side-discrepant_contractor_invoice" href="#workbench" data-preset="discrepant_contractor_invoice">Plumbing bill ($200 error)</a>
@@ -387,7 +426,8 @@ def render_studio_html(csp_nonce: str = "") -> str:
               </div>
               <textarea id="bank-csv-input" name="bank_csv_input" maxlength="250000" spellcheck="false" style="min-height:92px; margin-bottom:10px;" placeholder="Date,Description,Amount&#10;2026-10-03,ACH PAYMENT HEARTLAND FLOUR PANTRY SUPPLY,6928.00"></textarea>
               <div class="btn-row" style="margin-bottom:10px;">
-                <button type="button" class="btn btn-primary btn-sm" id="run-custom-recon-btn">Match My Bank Statement</button>
+                <button type="button" class="btn btn-primary btn-sm" id="export-bank-qbo-btn">Download QuickBooks 3-Column CSV (.csv)</button>
+                <button type="button" class="btn btn-sm" id="run-custom-recon-btn">Match Against Checked Bill(s)</button>
                 <button type="button" class="btn btn-sm" id="run-recon-btn">Try October sample (demo data)</button>
               </div>
               <div class="table-wrap" id="bank-recon-container" tabindex="0" role="region" aria-label="Bank statement reconciliation table" style="font-size:13px; color:var(--muted);">

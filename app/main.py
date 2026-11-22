@@ -10,23 +10,24 @@ from urllib.parse import parse_qs
 
 import anyio
 from fastapi import FastAPI, HTTPException, Query, Request, Response
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 import uvicorn
 
-from app.analytics import build_chatgpt_openapi, detect_source, get_analytics_snapshot, record_event, render_analytics_html
+from app.analytics import detect_source, record_event
 from app.audit_links import check_audit_link_rate_limit, create_audit_link, get_audit_record, render_verified_audit_html
-from app.exporter import DEFAULT_EXPORT_DIR, export_ledger_bundle, get_ephemeral_export, sanitize_export_filename
+from app.exporter import DEFAULT_EXPORT_DIR, export_bank_transactions_qbo_csv, export_ledger_bundle, get_ephemeral_export, sanitize_export_filename
 from app.extractor import extract_financial_document
+from app.mcp_compound import parse_raw_bank_csv_text
 from app.mcp_server import MCP_PROTOCOL_VERSION, MCP_TOOLS_CATALOG, handle_mcp_jsonrpc
 from app.models import ExportBundleRequest, ExtractDocumentRequest, ReconcileLedgerRequest
 from app.oauth_quota import OAuth21Server, QuotaManager, STRIPE_UPGRADE_URL, _is_production_runtime, extract_caller_ip, resolve_request_workspace
 from app.pdf_vision_helper import extract_invoice_text_from_upload, parse_upload_from_request
 from app.presets import get_all_presets
 from app.reconciler import reconcile_invoices_with_bank_ledger
+from app.routes_pages import resolve_public_origin as _resolve_public_origin, router as pages_router
 from app.stripe_verify import verify_paid_stripe_checkout_session as _verify_paid_stripe_checkout_session, verify_stripe_webhook_signature as _verify_stripe_webhook_signature
-from app.studio_pages import BILLTALLY_FAVICON_SVG, render_about_html, render_docs_html, render_privacy_html, render_terms_html
+from app.studio_pages import BILLTALLY_FAVICON_SVG
 from app.studio_ui import render_studio_html
-from app.vertical_pages import render_robots_txt, render_sitemap_xml, render_vertical_page_html
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 MAX_BODY_BYTES = 5_000_000
@@ -34,9 +35,10 @@ MAX_BODY_BYTES = 5_000_000
 app = FastAPI(
     title="BillTally",
     description="Plain-English Bill & Invoice Math Checker, Bank Statement Matcher & Spreadsheet Exporter",
-    version="1.0.0",
+    version="1.1.0",
     docs_url="/openapi-docs",
 )
+app.include_router(pages_router)
 
 oauth_server = OAuth21Server(base_url="http://localhost:8791")
 quota_manager = QuotaManager()
@@ -45,7 +47,12 @@ _OPENAI_CHALLENGE_STATE: Dict[str, str] = {"token": "YFsHN-fut-TBj-AukzfY5eO_uhE
 
 @app.middleware("http")
 async def security_headers_and_body_cap(request: Request, call_next: Callable) -> Response:
-    """Enforce a streaming 5 MB payload cap (including chunked requests) and attach strict CSP + OWASP headers."""
+    """Canonicalize www host, enforce streaming 5 MB payload cap, and attach strict CSP + OWASP headers."""
+    host_hdr = (request.headers.get("host") or "").split(":")[0].lower()
+    if host_hdr == "www.billtally.app" and request.method in ("GET", "HEAD") and not request.url.path.startswith(("/mcp", "/.well-known/")):
+        qs = f"?{request.url.query}" if request.url.query else ""
+        return RedirectResponse(url=f"https://billtally.app{request.url.path}{qs}", status_code=301)
+
     cl_header = request.headers.get("content-length")
     if cl_header:
         try:
@@ -72,11 +79,13 @@ async def security_headers_and_body_cap(request: Request, call_next: Callable) -
     resp.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=(), payment=()"
     resp.headers["Cross-Origin-Opener-Policy"] = "same-origin-allow-popups"
     resp.headers["Content-Security-Policy"] = (
-        f"default-src 'self'; script-src 'self' 'nonce-{csp_nonce}'; "
+        f"default-src 'self'; script-src 'self' 'nonce-{csp_nonce}' https://www.googletagmanager.com https://www.googleadservices.com; "
         "worker-src 'self' blob:; "
         "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-        "font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob:; "
-        "connect-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'"
+        "font-src 'self' https://fonts.gstatic.com data:; "
+        "img-src 'self' data: blob: https://www.google.com https://*.doubleclick.net https://www.googleadservices.com https://www.googletagmanager.com; "
+        "connect-src 'self' https://www.googletagmanager.com https://*.google-analytics.com https://www.googleadservices.com https://*.doubleclick.net https://www.google.com; "
+        "base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'"
     )
     return resp
 
@@ -93,7 +102,12 @@ async def set_openai_challenge(request: Request) -> JSONResponse:
     provided = request.headers.get("x-admin-secret", "").strip()
     if not admin_secret or not hmac.compare_digest(provided, admin_secret):
         return JSONResponse(status_code=403, content={"error": "Forbidden: valid x-admin-secret required."})
-    raw = await request.json()
+    try:
+        raw = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "Invalid JSON payload."})
+    if not isinstance(raw, dict):
+        return JSONResponse(status_code=400, content={"error": "Expected JSON object."})
     token = str(raw.get("token", "")).strip()
     _OPENAI_CHALLENGE_STATE["token"] = token
     return JSONResponse(status_code=200, content={"success": True, "token": token})
@@ -102,6 +116,8 @@ async def set_openai_challenge(request: Request) -> JSONResponse:
 @app.get("/openai-plugin.zip")
 def download_openai_plugin_zip() -> FileResponse:
     zip_path = PROJECT_ROOT / "billtally-openai-plugin.zip"
+    if not zip_path.is_file():
+        raise HTTPException(status_code=404, detail="OpenAI plugin archive not available.")
     return FileResponse(path=str(zip_path), filename="billtally-openai-plugin.zip", media_type="application/zip")
 
 
@@ -110,48 +126,19 @@ def studio_home(request: Request) -> HTMLResponse:
     src = detect_source(request.headers.get("user-agent", ""), path="/")
     record_event(event_type="page_view", source=src, detail="GET /")
     csp_nonce = getattr(request.state, "csp_nonce", "")
-    return HTMLResponse(content=render_studio_html(csp_nonce=csp_nonce))
-
-
-@app.get("/analytics", response_class=HTMLResponse)
-def analytics_page() -> HTMLResponse:
-    return HTMLResponse(content=render_analytics_html())
-
-
-@app.get("/api/analytics")
-def api_analytics() -> Dict[str, Any]:
-    return get_analytics_snapshot()
-
-
-@app.get("/chatgpt-openapi.json")
-def chatgpt_openapi_spec(request: Request) -> Dict[str, Any]:
-    return build_chatgpt_openapi(base_url=_resolve_public_origin(request))
-
-
-@app.get("/about", response_class=HTMLResponse)
-def about_page() -> HTMLResponse:
-    return HTMLResponse(content=render_about_html())
-
-
-@app.get("/docs", response_class=HTMLResponse)
-@app.get("/documentation", response_class=HTMLResponse)
-def public_docs_page() -> HTMLResponse:
-    return HTMLResponse(content=render_docs_html())
+    return HTMLResponse(content=render_studio_html(csp_nonce=csp_nonce, public_base_url=_resolve_public_origin(request)))
 
 
 @app.get("/health")
 def health_check() -> Dict[str, Any]:
-    return {"status": "ok", "service": "billtally-mcp", "port": 8791, "protocolVersion": MCP_PROTOCOL_VERSION, "tools_count": len(MCP_TOOLS_CATALOG)}
-
-
-@app.get("/privacy", response_class=HTMLResponse)
-def privacy_policy() -> HTMLResponse:
-    return HTMLResponse(content=render_privacy_html())
-
-
-@app.get("/terms", response_class=HTMLResponse)
-def terms_of_service() -> HTMLResponse:
-    return HTMLResponse(content=render_terms_html())
+    return {
+        "status": "ok",
+        "service": "billtally-mcp",
+        "version": "1.1.0",
+        "port": int(os.environ.get("PORT", "8791")),
+        "protocolVersion": MCP_PROTOCOL_VERSION,
+        "tools_count": len(MCP_TOOLS_CATALOG),
+    }
 
 
 @app.get("/favicon.svg")
@@ -162,20 +149,23 @@ def get_favicon_svg() -> Response:
 @app.get("/favicon.ico")
 def get_favicon_ico() -> Response:
     ico = PROJECT_ROOT / "openai_plugin_package" / "assets" / "favicon.ico"
-    return Response(content=ico.read_bytes(), media_type="image/x-icon") if ico.exists() else get_favicon_svg()
+    return Response(content=ico.read_bytes(), media_type="image/x-icon") if ico.is_file() else get_favicon_svg()
 
 
 @app.get("/icon.png")
 @app.get("/apple-touch-icon.png")
 def get_icon_png() -> Response:
-    return Response(content=(PROJECT_ROOT / "openai_plugin_package" / "assets" / "icon.png").read_bytes(), media_type="image/png")
+    icon_path = PROJECT_ROOT / "openai_plugin_package" / "assets" / "icon.png"
+    if not icon_path.is_file():
+        raise HTTPException(status_code=404, detail="Icon asset not found.")
+    return Response(content=icon_path.read_bytes(), media_type="image/png")
 
 
 @app.get("/mcp")
 def mcp_discovery() -> Dict[str, Any]:
     return {
         "name": "billtally-mcp",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "protocolVersion": MCP_PROTOCOL_VERSION,
         "transport": "streamable-http",
         "endpoint": "/mcp",
@@ -197,10 +187,14 @@ async def mcp_jsonrpc_endpoint(request: Request) -> Response:
     if isinstance(payload, list):
         if len(payload) == 0 or len(payload) > 20:
             return JSONResponse(status_code=400, content={"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "Invalid Request: JSON-RPC batch must contain 1 to 20 items."}})
-        responses = [
-            resp for item in payload
-            if (resp := handle_mcp_jsonrpc(item, quota_manager=quota_manager, default_workspace_id=caller_ws, is_prod=is_prod, caller_ip=caller_ip, public_base_url=pub_origin)[0]) is not None
-        ]
+
+        def _run_batch() -> list:
+            return [
+                resp for item in payload
+                if (resp := handle_mcp_jsonrpc(item, quota_manager=quota_manager, default_workspace_id=caller_ws, is_prod=is_prod, caller_ip=caller_ip, public_base_url=pub_origin)[0]) is not None
+            ]
+
+        responses = await anyio.to_thread.run_sync(_run_batch)
         return Response(status_code=202) if not responses else JSONResponse(status_code=200, content=responses)
     if isinstance(payload, dict):
         method = payload.get("method", "")
@@ -214,7 +208,9 @@ async def mcp_jsonrpc_endpoint(request: Request) -> Response:
             record_event(event_type="mcp_connect", source=src, detail=client_name or "MCP initialize")
         elif method == "tools/call":
             record_event(event_type="tool_call", source=src, tool_name=str(params.get("name", "-")), detail="MCP tools/call")
-    resp_dict, status_code = handle_mcp_jsonrpc(payload, quota_manager=quota_manager, default_workspace_id=caller_ws, is_prod=is_prod, caller_ip=caller_ip, public_base_url=pub_origin)
+    resp_dict, status_code = await anyio.to_thread.run_sync(
+        lambda: handle_mcp_jsonrpc(payload, quota_manager=quota_manager, default_workspace_id=caller_ws, is_prod=is_prod, caller_ip=caller_ip, public_base_url=pub_origin)
+    )
     return Response(status_code=202) if (status_code == 202 or resp_dict is None) else JSONResponse(status_code=status_code, content=resp_dict)
 
 
@@ -240,6 +236,7 @@ async def oauth_register(request: Request) -> JSONResponse:
 
 @app.get("/oauth/authorize")
 def oauth_authorize(
+    request: Request,
     response_type: str = Query(...), client_id: str = Query(...), redirect_uri: str = Query(...),
     code_challenge: str = Query(...), code_challenge_method: str = Query("S256"),
     state: Optional[str] = Query(None), scope: str = Query("mcp:tools mcp:export"),
@@ -248,6 +245,7 @@ def oauth_authorize(
         issued = oauth_server.issue_authorization_code(
             response_type=response_type, client_id=client_id, redirect_uri=redirect_uri,
             code_challenge=code_challenge, code_challenge_method=code_challenge_method, state=state, scope=scope,
+            caller_ip=extract_caller_ip(request),
         )
         return JSONResponse(status_code=200, content=issued)
     except ValueError as exc:
@@ -285,8 +283,9 @@ def api_presets() -> Dict[str, Any]:
 @app.get("/api/quota")
 def api_quota_status(request: Request, workspace_id: str = "default-workspace", api_key: Optional[str] = None) -> Dict[str, Any]:
     is_prod = _is_production_runtime(request)
-    ws = resolve_request_workspace(request, workspace_id, oauth_server=oauth_server, quota_manager=quota_manager, api_key=api_key)
-    return quota_manager.get_status(workspace_id=ws, api_key=api_key, is_prod=is_prod)
+    effective_key = request.headers.get("x-api-key") or api_key
+    ws = resolve_request_workspace(request, workspace_id, oauth_server=oauth_server, quota_manager=quota_manager, api_key=effective_key)
+    return quota_manager.get_status(workspace_id=ws, api_key=effective_key, is_prod=is_prod)
 
 
 @app.post("/api/quota/upgrade")
@@ -313,8 +312,10 @@ async def api_quota_upgrade(
     ws = resolve_request_workspace(request, workspace_id, oauth_server=oauth_server, quota_manager=quota_manager)
     src = detect_source(request.headers.get("user-agent", ""), path="/api/quota/upgrade")
 
-    if is_prod_https and not admin_ok and (not sid or not _verify_paid_stripe_checkout_session(sid)):
-        return JSONResponse(status_code=403, content={"error": "Stripe checkout required to unlock Pro.", "checkout_url": STRIPE_UPGRADE_URL})
+    if is_prod_https and not admin_ok:
+        verified = bool(sid) and await anyio.to_thread.run_sync(_verify_paid_stripe_checkout_session, sid)
+        if not verified:
+            return JSONResponse(status_code=403, content={"error": "Stripe checkout required to unlock Pro.", "checkout_url": STRIPE_UPGRADE_URL})
     if sid:
         upgraded, should_log = quota_manager.claim_stripe_browser_session(sid, ws)
         if upgraded is None:
@@ -343,7 +344,12 @@ async def stripe_webhook(request: Request) -> JSONResponse:
     if event.get("type") == "checkout.session.completed":
         obj = (event.get("data") or {}).get("object") or {}
         sid = str(obj.get("id", "")).strip()
-        if obj.get("payment_status") == "paid" and sid:
+        curr = str(obj.get("currency") or "usd").strip().lower()
+        try:
+            amt_total = int(obj.get("amount_total") or 0)
+        except (TypeError, ValueError):
+            amt_total = 0
+        if obj.get("payment_status") == "paid" and sid and curr == "usd" and amt_total >= 4999:
             ws = str(obj.get("client_reference_id") or f"stripe-{sid[-12:]}")
             upgraded, should_log = quota_manager.redeem_stripe_webhook(sid, ws)
             if upgraded is not None:
@@ -366,7 +372,10 @@ def api_extract_document(req: ExtractDocumentRequest, request: Request) -> Dict[
         parsed = extract_financial_document(req)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    quota_state = quota_manager.consume_document(ws, api_key=req.api_key, is_prod=is_prod, caller_ip=caller_ip)
+    try:
+        quota_state = quota_manager.consume_document(ws, api_key=req.api_key, is_prod=is_prod, caller_ip=caller_ip)
+    except PermissionError as exc:
+        raise HTTPException(status_code=402, detail=str(exc)) from exc
     result = parsed.model_copy(update={"quota_state": quota_state})
     src = detect_source(request.headers.get("user-agent", ""), path="/api/extract")
     record_event(event_type="tool_call", source=src, tool_name="extract_financial_documents", detail="invoice_checked")
@@ -438,7 +447,10 @@ def api_export_bundle(req: ExportBundleRequest, request: Request) -> Dict[str, A
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    quota_manager.consume_export(ws, api_key=api_key, doc_count=len(req.documents), is_prod=is_prod, caller_ip=caller_ip)
+    try:
+        quota_manager.consume_export(ws, api_key=api_key, doc_count=len(req.documents), is_prod=is_prod, caller_ip=caller_ip)
+    except PermissionError as exc:
+        raise HTTPException(status_code=402, detail=str(exc)) from exc
     src = detect_source(request.headers.get("user-agent", ""), path="/api/export")
     record_event(event_type="tool_call", source=src, tool_name="export_ledger_bundle", detail=req.format)
     payload_out = result.model_dump()
@@ -483,34 +495,41 @@ def view_verified_audit_link(audit_id: str, request: Request) -> Response:
     )
 
 
-@app.get("/convert/bank-statement-to-qbo-csv", response_class=HTMLResponse)
-def vertical_bank_to_qbo(request: Request) -> HTMLResponse:
-    return HTMLResponse(content=render_vertical_page_html("bank-statement-to-qbo-csv", public_base_url=_resolve_public_origin(request)))
-
-
-@app.get("/check/supplier-invoice", response_class=HTMLResponse)
-def vertical_supplier_invoice(request: Request) -> HTMLResponse:
-    return HTMLResponse(content=render_vertical_page_html("supplier-invoice", public_base_url=_resolve_public_origin(request)))
-
-
-@app.get("/check/contractor-invoice", response_class=HTMLResponse)
-def vertical_contractor_invoice(request: Request) -> HTMLResponse:
-    return HTMLResponse(content=render_vertical_page_html("contractor-invoice", public_base_url=_resolve_public_origin(request)))
-
-
-@app.get("/check/cam-reconciliation", response_class=HTMLResponse)
-def vertical_cam_reconciliation(request: Request) -> HTMLResponse:
-    return HTMLResponse(content=render_vertical_page_html("cam-reconciliation", public_base_url=_resolve_public_origin(request)))
-
-
-@app.get("/sitemap.xml")
-def sitemap_xml(request: Request) -> Response:
-    return Response(content=render_sitemap_xml(_resolve_public_origin(request)), media_type="application/xml")
-
-
-@app.get("/robots.txt", response_class=PlainTextResponse)
-def robots_txt(request: Request) -> PlainTextResponse:
-    return PlainTextResponse(content=render_robots_txt(_resolve_public_origin(request)))
+@app.post("/api/bank-csv-export")
+async def api_export_bank_csv(request: Request) -> Dict[str, Any]:
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload.")
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Expected JSON object.")
+    bank_csv_text = str(body.get("bank_csv_text") or "").strip()
+    if not bank_csv_text:
+        raise HTTPException(status_code=400, detail="Please upload or paste your bank statement CSV first.")
+    is_prod = _is_production_runtime(request)
+    api_key = (body.get("api_key") or request.query_params.get("api_key") or None)
+    ws_hint = str(body.get("workspace_id") or request.query_params.get("workspace_id") or "default-workspace")
+    ws = resolve_request_workspace(request, ws_hint, oauth_server=oauth_server, quota_manager=quota_manager, api_key=api_key)
+    caller_ip = extract_caller_ip(request)
+    try:
+        quota_manager.check_export_available(ws, api_key=api_key, doc_count=1, is_prod=is_prod, caller_ip=caller_ip)
+    except PermissionError as exc:
+        raise HTTPException(status_code=402, detail=str(exc)) from exc
+    txns = parse_raw_bank_csv_text(bank_csv_text)
+    if not txns:
+        raise HTTPException(status_code=400, detail="Could not find any bank transactions in that CSV. Include Date, Description, and Amount columns.")
+    bundle_name = str(body.get("bundle_name") or "bank_statement_qbo").strip() or "bank_statement_qbo"
+    try:
+        out = export_bank_transactions_qbo_csv(txns, bundle_name=bundle_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
+        quota_manager.consume_export(ws, api_key=api_key, doc_count=1, is_prod=is_prod, caller_ip=caller_ip)
+    except PermissionError as exc:
+        raise HTTPException(status_code=402, detail=str(exc)) from exc
+    src = detect_source(request.headers.get("user-agent", ""), path="/api/bank-csv-export")
+    record_event(event_type="tool_call", source=src, tool_name="export_ledger_bundle", detail="quickbooks_bank_csv")
+    return out
 
 
 @app.get("/downloads/{filename}")
@@ -544,21 +563,11 @@ def download_exported_bundle(filename: str, request: Request) -> Response:
     return FileResponse(path=str(resolved), filename=resolved.name, media_type=media_type, headers=dl_headers)
 
 
-def _resolve_public_origin(request: Request) -> str:
-    env_url = os.environ.get("PUBLIC_BASE_URL", "").strip().rstrip("/")
-    if env_url:
-        return env_url
-    base = str(request.base_url).rstrip("/")
-    if "testserver" in base:
-        return "http://localhost:8791"
-    if (request.headers.get("x-forwarded-proto") == "https" or "railway.app" in base) and base.startswith("http://"):
-        base = "https://" + base[len("http://") :]
-    return base
-
-
 @app.get("/manifests/claude")
 def get_claude_manifest(request: Request) -> Dict[str, Any]:
     manifest_path = PROJECT_ROOT / "claude-connector-manifest.json"
+    if not manifest_path.is_file():
+        raise HTTPException(status_code=404, detail="Claude manifest not found.")
     origin = _resolve_public_origin(request)
     raw = manifest_path.read_text(encoding="utf-8").replace("http://localhost:8791", origin)
     return json.loads(raw)
@@ -567,6 +576,8 @@ def get_claude_manifest(request: Request) -> Dict[str, Any]:
 @app.get("/manifests/openai")
 def get_openai_manifest(request: Request) -> Dict[str, Any]:
     manifest_path = PROJECT_ROOT / "openai-mcp-app.json"
+    if not manifest_path.is_file():
+        raise HTTPException(status_code=404, detail="OpenAI manifest not found.")
     origin = _resolve_public_origin(request)
     raw = manifest_path.read_text(encoding="utf-8").replace("http://localhost:8791", origin)
     return json.loads(raw)

@@ -4,6 +4,8 @@ Styled with the `achromatic-ledger` design system (`#f8f8f8` paper ground, `#fff
 Geist & Geist Mono tabular numerals, zero em-dashes).
 """
 
+import html
+
 BILLTALLY_FAVICON_SVG = (
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">'
     '<rect width="48" height="48" rx="11" fill="#111827" stroke="#374151" stroke-width="2"/>'
@@ -75,14 +77,42 @@ TOP_NAV_HTML = """
 """
 
 
-def render_docs_html() -> str:
+def _seo_head(title: str, description: str, path: str, public_base_url: str = "") -> str:
+    base = (public_base_url or "https://billtally.app").rstrip("/")
+    canonical = f"{base}{path}"
+    t = html.escape(title, quote=True)
+    d = html.escape(description, quote=True)
+    c = html.escape(canonical, quote=True)
+    img = html.escape(f"{base}/icon.png", quote=True)
+    return (
+        f'  <meta name="description" content="{d}" />\n'
+        f'  <link rel="canonical" href="{c}" />\n'
+        f'  <meta property="og:type" content="website" />\n'
+        f'  <meta property="og:title" content="{t}" />\n'
+        f'  <meta property="og:description" content="{d}" />\n'
+        f'  <meta property="og:url" content="{c}" />\n'
+        f'  <meta property="og:image" content="{img}" />\n'
+        f'  <meta name="twitter:card" content="summary" />\n'
+        f'  <meta name="twitter:title" content="{t}" />\n'
+        f'  <meta name="twitter:description" content="{d}" />'
+    )
+
+
+def render_docs_html(public_base_url: str = "") -> str:
     """Return the Public User & IT Administrator Documentation page for Claude/ChatGPT MCP review."""
+    seo = _seo_head(
+        "User & IT Admin Documentation | BillTally",
+        "Official documentation for BillTally MCP connector, fixed-decimal invoice verification, bank statement CSV matching, and zero-retention security.",
+        "/docs",
+        public_base_url,
+    )
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>User &amp; IT Admin Documentation | BillTally: Bill Math Checker &amp; Bank Statement Matcher</title>
+{seo}
   {SHARED_PAGE_STYLE}
 </head>
 <body>
@@ -147,14 +177,21 @@ def render_docs_html() -> str:
 </html>"""
 
 
-def render_about_html() -> str:
+def render_about_html(public_base_url: str = "") -> str:
     """Return the About & Company Information page for BillTally."""
+    seo = _seo_head(
+        "About BillTally | Bill Math Checker & Bank Statement Matcher",
+        "About BillTally: plain-English fixed-decimal bill math verification, bank statement reconciliation, and QuickBooks CSV / Excel export for small businesses and bookkeepers.",
+        "/about",
+        public_base_url,
+    )
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>About BillTally | Bill Math Checker &amp; Bank Statement Matcher</title>
+{seo}
   {SHARED_PAGE_STYLE}
 </head>
 <body>
@@ -187,14 +224,21 @@ def render_about_html() -> str:
 </html>"""
 
 
-def render_privacy_html() -> str:
+def render_privacy_html(public_base_url: str = "") -> str:
     """Return the plain-English Privacy & Confidentiality Policy page."""
+    seo = _seo_head(
+        "Privacy & Confidentiality Policy | BillTally",
+        "BillTally Privacy Policy: zero model training on customer financial documents, ephemeral in-memory verification, and TLS 1.3 transport encryption.",
+        "/privacy",
+        public_base_url,
+    )
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Privacy &amp; Confidentiality Policy | BillTally</title>
+{seo}
   {SHARED_PAGE_STYLE}
 </head>
 <body>
@@ -219,14 +263,21 @@ def render_privacy_html() -> str:
 </html>"""
 
 
-def render_terms_html() -> str:
+def render_terms_html(public_base_url: str = "") -> str:
     """Return the plain-English Terms of Service & Bookkeeping Disclaimer page."""
+    seo = _seo_head(
+        "Terms of Service & Disclaimer | BillTally",
+        "BillTally Terms of Service, read-only operation scope, pricing tiers, and bookkeeping software disclaimer.",
+        "/terms",
+        public_base_url,
+    )
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Terms of Service &amp; Disclaimer | BillTally</title>
+{seo}
   {SHARED_PAGE_STYLE}
 </head>
 <body>

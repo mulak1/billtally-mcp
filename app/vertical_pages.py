@@ -9,9 +9,44 @@ Each vertical route renders a focused, plain-English accounting utility landing 
 
 import html
 import json
+import os
 from typing import Any, Dict, List, Optional
+from urllib.parse import parse_qsl, urlencode
 
 from app.quota_manager import CHECK2QBO_COMPANION_URL
+
+_TRACKING_PARAM_KEYS = ("gclid", "gbraid", "wbraid", "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content")
+
+
+def get_google_ads_tag_id() -> str:
+    raw = os.environ.get("GOOGLE_ADS_TAG_ID", "AW-18526471751").strip()
+    if raw and all(ch.isalnum() or ch in ("-", "_") for ch in raw):
+        return raw
+    return "AW-18526471751"
+
+
+def render_gtag_head(csp_nonce: str = "") -> str:
+    """Return CSP-compliant Google Tag (gtag.js) snippet for Google Ads attribution & conversion tracking."""
+    tag_id = get_google_ads_tag_id()
+    if not tag_id:
+        return ""
+    nonce_attr = f' nonce="{_esc(csp_nonce)}"' if csp_nonce else ""
+    t_esc = _esc(tag_id)
+    return (
+        f'  <script async src="https://www.googletagmanager.com/gtag/js?id={t_esc}"{nonce_attr}></script>\n'
+        f'  <script{nonce_attr}>window.__BT_GADS_ID="{t_esc}";window.dataLayer=window.dataLayer||[];'
+        f"function gtag(){{dataLayer.push(arguments);}}gtag('js',new Date());gtag('config','{t_esc}');</script>"
+    )
+
+
+def _merge_tracking_params(base_href: str, incoming_qs: str) -> str:
+    if not incoming_qs:
+        return base_href
+    preserved = [(k, v) for k, v in parse_qsl(incoming_qs, keep_blank_values=False) if k.lower() in _TRACKING_PARAM_KEYS and v]
+    if not preserved:
+        return base_href
+    sep = "&" if "?" in base_href else "?"
+    return f"{base_href}{sep}{urlencode(preserved)}"
 
 VERTICAL_PAGES: Dict[str, Dict[str, Any]] = {
     "bank-statement-to-qbo-csv": {
@@ -145,12 +180,24 @@ def _safe_jsonld(obj: Any) -> str:
     return json.dumps(obj, ensure_ascii=False).replace("</", "<\\/")
 
 
-def render_vertical_page_html(slug: str, public_base_url: str = "") -> str:
+def render_vertical_page_html(
+    slug: str,
+    public_base_url: str = "",
+    *,
+    csp_nonce: str = "",
+    query_string: str = "",
+) -> str:
     """Render an SEO-ready, plain-English BillTally vertical destination page."""
     cfg = VERTICAL_PAGES[slug]
-    base = (public_base_url or "").rstrip("/")
-    canonical_url = f"{base}{cfg['path']}" if base else cfg["path"]
-    workbench_href = f"/?vertical={cfg['slug']}"
+    base = (public_base_url or "https://billtally.app").rstrip("/")
+    canonical_url = f"{base}{cfg['path']}"
+    og_image = f"{base}/icon.png"
+    workbench_href = _merge_tracking_params(f"/?vertical={cfg['slug']}", query_string)
+    upload_href = _merge_tracking_params(
+        f"/?vertical={cfg['slug']}&mode=upload" if cfg.get("open_recon") else "/?mode=upload",
+        query_string,
+    )
+    gtag_html = render_gtag_head(csp_nonce)
 
     app_ld = {
         "@context": "https://schema.org",
@@ -200,14 +247,25 @@ def render_vertical_page_html(slug: str, public_base_url: str = "") -> str:
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="light" />
   <title>{_esc(cfg['title'])} | BillTally</title>
   <meta name="description" content="{_esc(cfg['meta_description'])}" />
   <link rel="canonical" href="{_esc(canonical_url)}" />
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="{_esc(cfg['title'])} | BillTally" />
+  <meta property="og:description" content="{_esc(cfg['meta_description'])}" />
+  <meta property="og:url" content="{_esc(canonical_url)}" />
+  <meta property="og:image" content="{_esc(og_image)}" />
+  <meta name="twitter:card" content="summary" />
+  <meta name="twitter:title" content="{_esc(cfg['title'])} | BillTally" />
+  <meta name="twitter:description" content="{_esc(cfg['meta_description'])}" />
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <script type="application/ld+json">{_safe_jsonld(app_ld)}</script>
   <script type="application/ld+json">{_safe_jsonld(faq_ld)}</script>
+{gtag_html}
   <style>
     :root {{
+      color-scheme: light;
       --ground:#f8f8f8; --surface:#ffffff; --border:#e6e6e6; --text:#0a0a0a; --muted:#595959; --accent:#141414;
       --pill-ok-bg:#dcfae5; --pill-ok-ink:#04250e;
       --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
@@ -274,8 +332,8 @@ def render_vertical_page_html(slug: str, public_base_url: str = "") -> str:
 
       <section class="cta-card" aria-label="Launch pre-configured workbench">
         <div class="cta-row">
-          <a class="btn btn-primary" href="{_esc(workbench_href)}">{_esc(cfg['cta_label'])}</a>
-          <a class="btn" href="/">Upload Your Own PDF / CSV</a>
+          <a class="btn btn-primary" href="{_esc(upload_href)}">{'Upload & Convert My Bank CSV Now →' if cfg.get('open_recon') else 'Upload Your Own PDF / CSV →'}</a>
+          <a class="btn" href="{_esc(workbench_href)}">{_esc(cfg['cta_label'])}</a>
         </div>
         <p class="sample-note"><strong>1-Click Sample Ready:</strong> {_esc(cfg['sample_callout'])}</p>
         <div class="privacy-bar">
@@ -283,7 +341,6 @@ def render_vertical_page_html(slug: str, public_base_url: str = "") -> str:
           <span><strong>Fixed-Decimal Math:</strong> Zero rounding guesswork.</span>
           <span><strong>No Signup Required:</strong> Free instant audit.</span>
         </div>
-        {companion_html}
       </section>
 
       <h2>What BillTally Checks Automatically</h2>
@@ -295,6 +352,7 @@ def render_vertical_page_html(slug: str, public_base_url: str = "") -> str:
       <div>
         {faqs_html}
       </div>
+      {companion_html}
 
       <h2>More Free BillTally Checkers</h2>
       <div class="other-wrap">
@@ -316,4 +374,16 @@ def render_sitemap_xml(public_base_url: str) -> str:
 
 def render_robots_txt(public_base_url: str) -> str:
     base = (public_base_url or "https://billtally.app").rstrip("/")
-    return f"User-agent: *\nAllow: /\nDisallow: /v/\nDisallow: /api/\nSitemap: {base}/sitemap.xml\n"
+    return (
+        "User-agent: *\n"
+        "Allow: /\n"
+        "Disallow: /v/\n"
+        "Disallow: /api/\n"
+        "Disallow: /downloads/\n"
+        "Disallow: /analytics\n"
+        "Disallow: /oauth/\n"
+        "Disallow: /webhooks/\n"
+        "Disallow: /openapi-docs\n"
+        "Disallow: /manifests/\n"
+        f"Sitemap: {base}/sitemap.xml\n"
+    )

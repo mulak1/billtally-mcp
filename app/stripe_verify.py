@@ -27,7 +27,16 @@ def verify_paid_stripe_checkout_session(session_id: str) -> bool:
             if resp.status != 200:
                 return False
             data = json.loads(resp.read().decode("utf-8"))
-            return data.get("payment_status") == "paid" and data.get("id") == sid
+            amount_total = int(data.get("amount_total") or 0)
+            currency = str(data.get("currency") or "").lower()
+            status = str(data.get("status") or "").lower()
+            return (
+                data.get("payment_status") == "paid"
+                and data.get("id") == sid
+                and status == "complete"
+                and currency == "usd"
+                and amount_total >= 4999
+            )
     except Exception:
         return False
 

@@ -49,7 +49,10 @@ STUDIO_RENDER_JS = """
         'Bill #' + doc.invoice_number + ' · ' + (doc.payment_terms || ('Issued ' + doc.issue_date));
 
       const catSelect = document.getElementById('category-select');
-      if (doc.suggested_category && catSelect) catSelect.value = doc.suggested_category;
+      if (doc.suggested_category && catSelect) {
+        const hasOpt = Array.from(catSelect.options).some(o => o.value === doc.suggested_category);
+        catSelect.value = hasOpt ? doc.suggested_category : 'General Operating Expense';
+      }
 
       const compCap = document.getElementById('compliance-caption');
       const badges = [];
@@ -68,6 +71,9 @@ STUDIO_RENDER_JS = """
       const statusCap = document.getElementById('kpi-status-caption');
       const taxPct = Number(doc.effective_tax_rate_pct || 0).toFixed(2) + '%';
 
+      const deltaNum = Number(doc.discrepancy_delta || 0);
+      const isManualReview = !doc.math_verified && (Math.abs(deltaNum) < 0.005 || !Array.isArray(doc.line_items) || doc.line_items.length === 0);
+
       if (doc.math_verified) {
         banner.className = 'banner banner-ok';
         banner.innerHTML =
@@ -78,28 +84,39 @@ STUDIO_RENDER_JS = """
         statusCap.textContent = 'Balanced to the penny · Tax ' + taxPct;
         actionsBox.style.display = 'none';
       } else {
-        const isOvercharge = Number(doc.discrepancy_delta) > 0;
-        const absDiff = fmtMoney(Math.abs(doc.discrepancy_delta));
-        const headLabel = isOvercharge ? 'Overcharge Caught:' : 'Under-Billing Caught:';
-        const tailNote = isOvercharge ? ('You save <strong>' + escHtml(absDiff) + '</strong>') : ('Under-billed by <strong>' + escHtml(absDiff) + '</strong>');
-        banner.className = 'banner banner-err';
-        banner.innerHTML =
-          '<div>' + SVG_ALERT + ' <strong>' + headLabel + '</strong> Supplier billed <strong>' + escHtml(fmtMoney(doc.total)) + '</strong>, but the true math is <strong>' + escHtml(fmtMoney(doc.computed_total)) + '</strong> (' + tailNote + ').</div>' +
-          '<button type="button" class="btn btn-sm" id="jump-disputed-btn" style="background:#ffffff;">Jump to Disputed Line ↓</button>';
-        const jumpBtn = document.getElementById('jump-disputed-btn');
-        if (jumpBtn) jumpBtn.addEventListener('click', jumpToDisputedRow);
+        const isOvercharge = deltaNum > 0;
+        const absDiff = fmtMoney(Math.abs(deltaNum));
+        if (isManualReview) {
+          banner.className = 'banner banner-warn';
+          banner.innerHTML =
+            '<div>' + SVG_ALERT + ' <strong>Manual Review Required:</strong> ' + escHtml(doc.plain_english_summary || 'Review unparsed or offsetting line items before approving.') + '</div>' +
+            '<span class="pill pill-warn">Review needed</span>';
+          deltaEl.textContent = '$0.00';
+          deltaEl.style.color = 'var(--warning)';
+          statusCap.textContent = 'Manual line-item review required · Tax ' + taxPct;
+          actionsBox.style.display = 'none';
+        } else {
+          const headLabel = isOvercharge ? 'Overcharge Caught:' : 'Under-Billing Caught:';
+          const tailNote = isOvercharge ? ('You save <strong>' + escHtml(absDiff) + '</strong>') : ('Under-billed by <strong>' + escHtml(absDiff) + '</strong>');
+          banner.className = 'banner banner-err';
+          banner.innerHTML =
+            '<div>' + SVG_ALERT + ' <strong>' + headLabel + '</strong> Supplier billed <strong>' + escHtml(fmtMoney(doc.total)) + '</strong>, but the true math is <strong>' + escHtml(fmtMoney(doc.computed_total)) + '</strong> (' + tailNote + ').</div>' +
+            '<button type="button" class="btn btn-sm" id="jump-disputed-btn" style="background:#ffffff;">Jump to Disputed Line ↓</button>';
+          const jumpBtn = document.getElementById('jump-disputed-btn');
+          if (jumpBtn) jumpBtn.addEventListener('click', jumpToDisputedRow);
 
-        deltaEl.textContent = (doc.discrepancy_delta > 0 ? '+' : '') + fmtMoney(doc.discrepancy_delta);
-        deltaEl.style.color = 'var(--negative)';
-        statusCap.textContent = 'Billed total off by ' + fmtMoney(doc.discrepancy_delta) + ' · Tax ' + taxPct;
-        actionsBox.style.display = 'block';
-        document.getElementById('label-corrected-amt').textContent = fmtMoney(doc.computed_total);
-        document.getElementById('label-billed-amt').textContent = fmtMoney(doc.total);
-        const noteBox = document.getElementById('supplier-note-box');
-        noteBox.value = doc.vendor_dispute_note || '';
-        const subj = encodeURIComponent('Math check on Invoice #' + doc.invoice_number);
-        const body = encodeURIComponent(doc.vendor_dispute_note || '');
-        document.getElementById('mailto-link').href = 'mailto:?subject=' + subj + '&body=' + body;
+          deltaEl.textContent = (deltaNum > 0 ? '+' : '') + fmtMoney(deltaNum);
+          deltaEl.style.color = 'var(--negative)';
+          statusCap.textContent = 'Billed total off by ' + fmtMoney(deltaNum) + ' · Tax ' + taxPct;
+          actionsBox.style.display = 'block';
+          document.getElementById('label-corrected-amt').textContent = fmtMoney(doc.computed_total);
+          document.getElementById('label-billed-amt').textContent = fmtMoney(doc.total);
+          const noteBox = document.getElementById('supplier-note-box');
+          noteBox.value = doc.vendor_dispute_note || '';
+          const subj = encodeURIComponent('Math check on Invoice #' + doc.invoice_number);
+          const body = encodeURIComponent(doc.vendor_dispute_note || '');
+          document.getElementById('mailto-link').href = 'mailto:?subject=' + subj + '&body=' + body;
+        }
       }
 
       let disputedAssigned = false;
@@ -121,13 +138,14 @@ STUDIO_RENDER_JS = """
           </tr>`;
       }).join('');
 
-      const subMismatch = doc.subtotal !== doc.computed_subtotal;
-      const totMismatch = !doc.math_verified;
+      const subMismatch = !isManualReview && (doc.subtotal !== doc.computed_subtotal);
+      const totMismatch = !doc.math_verified && !isManualReview;
       const totRowId = (totMismatch && !disputedAssigned) ? 'id="disputed-row"' : '';
-      const totDiffWord = Number(doc.discrepancy_delta) >= 0 ? 'overcharge' : 'under-billed';
+      const totDiffWord = deltaNum >= 0 ? 'overcharge' : 'under-billed';
       const totBadge = doc.math_verified
         ? 'Balanced'
-        : ((doc.discrepancy_delta > 0 ? '+' : '') + fmtMoney(doc.discrepancy_delta) + ' ' + totDiffWord);
+        : (isManualReview ? 'Review needed' : ((deltaNum > 0 ? '+' : '') + fmtMoney(deltaNum) + ' ' + totDiffWord));
+      const totPillCls = doc.math_verified ? 'pill-ok' : (isManualReview ? 'pill-warn' : 'pill-err');
 
       document.getElementById('table-container').innerHTML = `
         <table>
@@ -151,7 +169,7 @@ STUDIO_RENDER_JS = """
               <td colspan="4" style="font-weight:500;">Total due</td>
               <td class="money">${totMismatch ? ('<del class="billed-strike">' + escHtml(fmtMoney(doc.total)) + '</del><span style="color:var(--negative);">' + escHtml(fmtMoney(doc.computed_total)) + '</span>') : escHtml(fmtMoney(doc.total))}</td>
               <td class="money">${escHtml(fmtMoney(doc.computed_total))}</td>
-              <td class="num"><span class="pill ${doc.math_verified ? 'pill-ok' : 'pill-err'}">${escHtml(totBadge)}</span></td>
+              <td class="num"><span class="pill ${totPillCls}">${escHtml(totBadge)}</span></td>
             </tr>
           </tfoot>
         </table>`;

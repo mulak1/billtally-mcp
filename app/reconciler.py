@@ -14,15 +14,46 @@ from app.extractor import _to_dec
 from app.models import ReconcileLedgerRequest, ReconciliationReport
 
 _CENT = Decimal("0.01")
-_STOP_WORDS = {"inc", "llc", "corp", "ltd", "ab", "co", "ach", "debit", "wire", "out", "card", "charge", "the"}
+_STOP_WORDS = {
+    "inc", "llc", "corp", "ltd", "ab", "co", "ach", "debit", "wire", "out",
+    "card", "charge", "the", "pos", "purchase", "payment", "checkcard",
+    "autopay", "recurring", "online", "transfer", "bill", "pay", "pmt",
+    "withdrawal", "dbt", "crd", "visa", "mastercard", "amex", "check", "chk",
+}
+_DATE_FORMATS = (
+    "%Y-%m-%d",
+    "%m/%d/%Y",
+    "%m/%d/%y",
+    "%m-%d-%Y",
+    "%Y/%m/%d",
+    "%b %d, %Y",
+    "%B %d, %Y",
+    "%d-%b-%Y",
+)
+
+
+def _parse_date_opt(val: Any) -> date | None:
+    text = str(val or "").strip()
+    if not text:
+        return None
+    # Strip trailing time component if ISO timestamp (e.g. 2026-03-15T12:00:00Z)
+    if len(text) >= 10 and text[4:5] == "-" and text[7:8] == "-":
+        text_iso = text[:10]
+        try:
+            return datetime.strptime(text_iso, "%Y-%m-%d").date()
+        except ValueError:
+            pass
+    for fmt in _DATE_FORMATS:
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    return None
 
 
 def _parse_iso_date(val: Any) -> date:
-    text = str(val or "2026-10-01").strip()[:10]
-    try:
-        return datetime.strptime(text, "%Y-%m-%d").date()
-    except ValueError:
-        return date(2026, 10, 1)
+    parsed = _parse_date_opt(val)
+    return parsed if parsed is not None else date(2026, 10, 1)
 
 
 def _norm_currency(val: Any, fallback: str = "USD") -> str:
@@ -46,27 +77,42 @@ def _vendor_similarity(vendor: str, bank_desc: str) -> float:
 
 def _detect_duplicate_bank_charges(
     bank_transactions: List[Dict[str, Any]],
+    matched_indices: Set[int] | None = None,
 ) -> Tuple[List[Dict[str, Any]], Set[str]]:
-    """Identify duplicate bank debits having the same normalized vendor token, currency, and amount within 5 days."""
+    """Identify duplicate bank debits having the same normalized vendor token, currency, sign, and amount within 5 days."""
     duplicates: List[Dict[str, Any]] = []
     duplicate_txn_ids: Set[str] = set()
-    seen: List[Tuple[Set[str], Decimal, str, date, Dict[str, Any]]] = []
+    matched_set = matched_indices or set()
+    seen: List[Tuple[Set[str], Decimal, str, date | None, Dict[str, Any], int]] = []
 
     for idx, txn in enumerate(bank_transactions):
         txn_id = str(txn.get("txn_id", f"TXN-{idx+1}"))
         amt = _to_dec(txn.get("amount", 0))
         curr = _norm_currency(txn.get("currency"), "USD")
-        dt = _parse_iso_date(txn.get("date"))
+        dt = _parse_date_opt(txn.get("date"))
         tokens = _vendor_tokens(str(txn.get("description", "")))
 
         is_dup_of = None
-        for prev_tokens, prev_amt, prev_curr, prev_dt, prev_txn in seen:
-            same_amt = abs(amt - prev_amt) <= _CENT
+        is_dup_days = 0
+        for prev_tokens, prev_amt, prev_curr, prev_dt, prev_txn, prev_idx in seen:
+            # Skip if both transactions were legitimately matched 1-to-1 to distinct invoices
+            if idx in matched_set and prev_idx in matched_set:
+                continue
+            # Opposite signs (e.g. debit -$100 and refund +$100) are not duplicate charges
+            if (amt < Decimal("0.00")) != (prev_amt < Decimal("0.00")):
+                continue
+            same_amt = abs(abs(amt) - abs(prev_amt)) <= _CENT
             same_curr = curr == prev_curr
-            close_date = abs((dt - prev_dt).days) <= 5
+            if dt is not None and prev_dt is not None:
+                days_apart = abs((dt - prev_dt).days)
+                close_date = days_apart <= 5
+            else:
+                days_apart = 0
+                close_date = False
             shared_vendor = len(tokens & prev_tokens) >= 1
             if same_amt and same_curr and close_date and shared_vendor:
                 is_dup_of = prev_txn
+                is_dup_days = days_apart
                 break
 
         if is_dup_of is not None:
@@ -75,18 +121,18 @@ def _detect_duplicate_bank_charges(
                 {
                     "duplicate_txn_id": txn_id,
                     "original_txn_id": str(is_dup_of.get("txn_id", "UNKNOWN")),
-                    "date": str(txn.get("date", "")),
+                    "date": str(dt or txn.get("date", "")),
                     "description": str(txn.get("description", "")),
-                    "amount": float(amt),
+                    "amount": float(abs(amt)),
                     "currency": curr,
                     "reason": (
-                        f"Duplicate bank charge of {amt:.2f} within "
-                        f"{abs((dt - _parse_iso_date(is_dup_of.get('date'))).days)} day(s) of {is_dup_of.get('txn_id')}."
+                        f"Duplicate bank charge of {abs(amt):.2f} within "
+                        f"{is_dup_days} day(s) of {is_dup_of.get('txn_id')}."
                     ),
                 }
             )
         else:
-            seen.append((tokens, amt, curr, dt, txn))
+            seen.append((tokens, amt, curr, dt, txn, idx))
 
     return duplicates, duplicate_txn_ids
 
@@ -101,6 +147,7 @@ def reconcile_invoices_with_bank_ledger(req: ReconcileLedgerRequest) -> Reconcil
     used_bank_indices: Set[int] = set()
     tol_dec = _to_dec(req.amount_tolerance)
 
+    has_signed_debits = any(_to_dec(t.get("amount", 0)) < Decimal("0.00") for t in req.bank_transactions)
     for inv in req.invoices:
         inv_num = str(inv.get("invoice_number", "INV-UNKNOWN"))
         inv_vendor = str(inv.get("vendor", "Unknown Vendor"))
@@ -133,7 +180,8 @@ def reconcile_invoices_with_bank_ledger(req: ReconcileLedgerRequest) -> Reconcil
             if sim <= 0.0:
                 continue
 
-            score = Decimal(str(sim)) * Decimal("100") - Decimal(days_delta) - (amt_diff * Decimal("10"))
+            polarity_bonus = Decimal("50") if (has_signed_debits and inv_amt > Decimal("0.00") and txn_amt < Decimal("0.00")) else Decimal("0")
+            score = Decimal(str(sim)) * Decimal("100") + polarity_bonus - Decimal(days_delta) - (amt_diff * Decimal("10"))
             if score > best_score:
                 best_score = score
                 best_idx = b_idx
@@ -173,7 +221,10 @@ def reconcile_invoices_with_bank_ledger(req: ReconcileLedgerRequest) -> Reconcil
                 }
             )
 
-    duplicate_charges, duplicate_txn_ids = _detect_duplicate_bank_charges(req.bank_transactions)
+    duplicate_charges, duplicate_txn_ids = _detect_duplicate_bank_charges(
+        req.bank_transactions,
+        matched_indices=used_bank_indices,
+    )
 
     unmatched_bank_txns: List[Dict[str, Any]] = []
     for b_idx, txn in enumerate(req.bank_transactions):
@@ -182,10 +233,11 @@ def reconcile_invoices_with_bank_ledger(req: ReconcileLedgerRequest) -> Reconcil
         txn_id = str(txn.get("txn_id", f"TXN-{b_idx+1}"))
         status = "DUPLICATE_DEBIT_ALERT" if txn_id in duplicate_txn_ids else "UNRECEIPTED_BANK_DEBIT"
         amt_dec = _to_dec(txn.get("amount", 0))
+        parsed_dt = _parse_date_opt(txn.get("date"))
         unmatched_bank_txns.append(
             {
                 "txn_id": txn_id,
-                "date": str(txn.get("date", "")),
+                "date": str(parsed_dt) if parsed_dt else str(txn.get("date", "")),
                 "description": str(txn.get("description", "")),
                 "amount": float(amt_dec),
                 "currency": _norm_currency(txn.get("currency"), "USD"),
@@ -193,10 +245,10 @@ def reconcile_invoices_with_bank_ledger(req: ReconcileLedgerRequest) -> Reconcil
             }
         )
 
-    matched_volume = float(sum((_to_dec(m["bank_amount"]) for m in matched), Decimal("0.00")).quantize(_CENT, rounding=ROUND_HALF_UP))
-    unmatched_inv_volume = float(sum((_to_dec(u["total"]) for u in unmatched_invoices), Decimal("0.00")).quantize(_CENT, rounding=ROUND_HALF_UP))
-    unmatched_bank_volume = float(sum((_to_dec(u["amount"]) for u in unmatched_bank_txns), Decimal("0.00")).quantize(_CENT, rounding=ROUND_HALF_UP))
-    duplicate_volume = float(sum((_to_dec(d["amount"]) for d in duplicate_charges), Decimal("0.00")).quantize(_CENT, rounding=ROUND_HALF_UP))
+    matched_volume = float(sum((abs(_to_dec(m["bank_amount"])) for m in matched), Decimal("0.00")).quantize(_CENT, rounding=ROUND_HALF_UP))
+    unmatched_inv_volume = float(sum((abs(_to_dec(u["total"])) for u in unmatched_invoices), Decimal("0.00")).quantize(_CENT, rounding=ROUND_HALF_UP))
+    unmatched_bank_volume = float(sum((abs(_to_dec(u["amount"])) for u in unmatched_bank_txns), Decimal("0.00")).quantize(_CENT, rounding=ROUND_HALF_UP))
+    duplicate_volume = float(sum((abs(_to_dec(d["amount"])) for d in duplicate_charges), Decimal("0.00")).quantize(_CENT, rounding=ROUND_HALF_UP))
 
     balanced = (
         len(unmatched_invoices) == 0

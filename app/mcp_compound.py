@@ -17,94 +17,194 @@ from app.extractor import _to_dec, extract_financial_document
 from app.models import ExportBundleRequest, ExtractDocumentRequest, ReconcileLedgerRequest
 from app.oauth_quota import QuotaManager
 from app.presets import get_all_presets, get_preset_by_id
-from app.reconciler import reconcile_invoices_with_bank_ledger
+from app.reconciler import _parse_date_opt, reconcile_invoices_with_bank_ledger
 
 MAX_BANK_CSV_CHARS = 250_000
 MAX_BANK_CSV_ROWS = 5000
-_AMOUNT_RE = re.compile(r"\(?[-+]?\$?\s*\d{1,3}(?:,\d{3})*(?:\.\d{2})\)?-?|\(?[-+]?\$?\s*\d+(?:\.\d{2})\)?-?")
-_DATE_RE = re.compile(r"\b(\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{2,4})\b")
+_AMOUNT_RE = re.compile(
+    r"\(?[-+]?\$?\s*\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?\)?-?"
+    r"|\(?[-+]?\$?\s*\d+\.\d{1,2}\)?-?"
+    r"|\(?[-+]?\$\s*\d+\)?-?"
+)
+_DATE_RE = re.compile(r"\b(\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{2,4}|\d{1,2}-\d{1,2}-\d{4})\b")
+_HEADER_DATE_KEYS = ("date", "posted", "trans date", "transaction date")
+_HEADER_DESC_KEYS = ("desc", "payee", "merchant", "vendor", "memo", "name", "details", "narrative")
+_HEADER_AMT_KEYS = ("amount", "amt", "total", "value")
+_HEADER_DEBIT_KEYS = ("debit", "withdrawal", "outflow", "charge", "payment")
+_HEADER_CREDIT_KEYS = ("credit", "deposit", "inflow")
+_HEADER_IGNORE_KEYS = ("balance", "running bal", "ending bal", "available")
 
 
-def _parse_abs_dec_amount(raw: str) -> Decimal:
+_STRICT_MONEY_RE = re.compile(
+    r"^\(?[-+]?[ \t]*[$€£]?[ \t]*[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?\)?-?$"
+)
+
+
+def _parse_signed_dec_amount(raw: str) -> Optional[Decimal]:
     s = str(raw or "").strip()
-    if not s:
-        return Decimal("0.00")
+    if not s or not _STRICT_MONEY_RE.fullmatch(s):
+        return None
+    is_neg = (s.startswith("(") and s.endswith(")")) or s.endswith("-")
     if s.startswith("(") and s.endswith(")"):
         s = "-" + s[1:-1]
-    if s.endswith("-"):
+    elif s.endswith("-"):
         s = "-" + s[:-1]
-    s = re.sub(r"[^0-9.\-]", "", s)
-    if not s or s.count(".") > 1 or s.count("-") > 1:
-        return Decimal("0.00")
-    return abs(_to_dec(s))
+    cleaned = re.sub(r"[^0-9.\-]", "", s)
+    if not cleaned or cleaned in ("-", ".", "-.") or cleaned.count(".") > 1:
+        return None
+    if cleaned.startswith("-") or is_neg:
+        cleaned = "-" + cleaned.replace("-", "")
+    else:
+        cleaned = cleaned.replace("-", "")
+    return _to_dec(cleaned)
 
 
-def parse_raw_bank_csv_text(raw_text: str) -> List[Dict[str, Any]]:
-    """Deterministically parse pasted bank CSV or line-delimited statement text into bank_transactions."""
-    text = str(raw_text or "").strip()[:MAX_BANK_CSV_CHARS]
-    if not text:
-        return []
+def _normalize_date_str(raw: str) -> str:
+    parsed = _parse_date_opt(raw)
+    if parsed is not None:
+        return parsed.isoformat()
+    return str(raw or "").strip() or "2026-10-01"
 
+
+def _is_balance_col(col: str) -> bool:
+    return any(k in col for k in _HEADER_IGNORE_KEYS)
+
+
+def _find_csv_header_row(parsed_rows: List[List[str]]) -> Optional[int]:
+    for idx, row in enumerate(parsed_rows[:15]):
+        low = [c.strip().lower() for c in row]
+        has_date = any(any(k in c for k in _HEADER_DATE_KEYS) for c in low)
+        has_desc = any(any(k in c for k in _HEADER_DESC_KEYS) for c in low)
+        has_amt = any(
+            (not _is_balance_col(c))
+            and any(k in c for k in (_HEADER_AMT_KEYS + _HEADER_DEBIT_KEYS + _HEADER_CREDIT_KEYS))
+            for c in low
+        )
+        if has_date and (has_desc or has_amt):
+            return idx
+    return None
+
+
+def _detect_delimiter(lines: List[str]) -> Optional[str]:
+    for ln in lines[:10]:
+        no_thousands = re.sub(r"(?<=\d),(?=\d{3}\b)", "", ln)
+        tab_cnt = no_thousands.count("\t")
+        comma_cnt = no_thousands.count(",")
+        if tab_cnt > 0 and tab_cnt >= comma_cnt:
+            return "\t"
+        if comma_cnt > 0:
+            return ","
+    return None
+
+
+def _parse_headered_bank_csv(parsed_rows: List[List[str]], hdr_idx: int) -> List[Dict[str, Any]]:
     rows_out: List[Dict[str, Any]] = []
-    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-    first_no_thousands = re.sub(r"(?<=\d),(?=\d{3}\b)", "", lines[0]) if lines else ""
-    if lines and ("," in first_no_thousands or "\t" in first_no_thousands):
-        delim = "\t" if ("\t" in first_no_thousands and "," not in first_no_thousands) else ","
-        reader = csv.reader(io.StringIO(text), delimiter=delim)
-        parsed_rows = [r for r in reader if any(c.strip() for c in r)]
-        if parsed_rows:
-            first_lower = [c.strip().lower() for c in parsed_rows[0]]
-            has_header = any(
-                k in col
-                for col in first_lower
-                for k in ("date", "desc", "merchant", "vendor", "amount", "debit", "withdrawal", "payee")
-            )
-            data_rows = parsed_rows[1:] if has_header else parsed_rows
-            date_idx = next((i for i, c in enumerate(first_lower) if "date" in c), 0) if has_header else 0
-            desc_idx = (
-                next((i for i, c in enumerate(first_lower) if any(k in c for k in ("desc", "payee", "merchant", "vendor", "memo"))), 1)
-                if has_header
-                else 1
-            )
-            amt_idx = (
-                next((i for i, c in enumerate(first_lower) if any(k in c for k in ("amount", "debit", "withdrawal", "total"))), -1)
-                if has_header
-                else -1
-            )
-            for idx, r in enumerate(data_rows, start=1):
-                if len(rows_out) >= MAX_BANK_CSV_ROWS:
-                    break
-                if len(r) < 2:
-                    continue
-                raw_date = r[date_idx].strip() if date_idx < len(r) else "2026-10-01"
-                raw_desc = r[desc_idx].strip() if desc_idx < len(r) else f"Bank Withdrawal {idx}"
-                raw_amt_cell = r[amt_idx].strip() if (amt_idx >= 0 and amt_idx < len(r)) else r[-1].strip()
-                amt_val = _parse_abs_dec_amount(raw_amt_cell)
-                if amt_val <= Decimal("0.00"):
-                    continue
-                rows_out.append(
-                    {
-                        "txn_id": f"CSV-{idx:03d}",
-                        "date": raw_date or "2026-10-01",
-                        "description": raw_desc or f"Bank Withdrawal {idx}",
-                        "amount": float(amt_val),
-                        "currency": "USD",
-                    }
-                )
-            if rows_out:
-                return rows_out
+    hdr_lower = [c.strip().lower() for c in parsed_rows[hdr_idx]]
+    date_idx = next((i for i, c in enumerate(hdr_lower) if any(k in c for k in _HEADER_DATE_KEYS)), 0)
+    desc_idx = next(
+        (i for i, c in enumerate(hdr_lower) if i != date_idx and any(k in c for k in _HEADER_DESC_KEYS)),
+        1 if date_idx != 1 else 0,
+    )
+    reserved = {date_idx, desc_idx}
+    debit_idx = next(
+        (i for i, c in enumerate(hdr_lower) if i not in reserved and (not _is_balance_col(c)) and any(k in c for k in _HEADER_DEBIT_KEYS)),
+        -1,
+    )
+    credit_idx = next(
+        (i for i, c in enumerate(hdr_lower) if i not in reserved and i != debit_idx and (not _is_balance_col(c)) and any(k in c for k in _HEADER_CREDIT_KEYS)),
+        -1,
+    )
+    amt_idx = next(
+        (i for i, c in enumerate(hdr_lower) if i not in reserved and i not in (debit_idx, credit_idx) and (not _is_balance_col(c)) and any(k in c for k in _HEADER_AMT_KEYS)),
+        -1,
+    )
+    for idx, r in enumerate(parsed_rows[hdr_idx + 1 :], start=1):
+        if len(rows_out) >= MAX_BANK_CSV_ROWS:
+            break
+        if len(r) < 2:
+            continue
+        raw_date = r[date_idx].strip() if date_idx < len(r) else ""
+        raw_desc = r[desc_idx].strip() if desc_idx < len(r) else f"Bank Transaction {idx}"
+        if not raw_date and any(b in raw_desc.lower() for b in ("beginning balance", "ending balance", "total credits", "total debits")):
+            continue
+        amt_val: Optional[Decimal] = None
+        if 0 <= debit_idx < len(r) and r[debit_idx].strip():
+            d_val = _parse_signed_dec_amount(r[debit_idx])
+            if d_val is not None and d_val != Decimal("0.00"):
+                amt_val = -abs(d_val)
+        if amt_val is None and 0 <= credit_idx < len(r) and r[credit_idx].strip():
+            c_val = _parse_signed_dec_amount(r[credit_idx])
+            if c_val is not None and c_val != Decimal("0.00"):
+                amt_val = abs(c_val)
+        if amt_val is None and 0 <= amt_idx < len(r) and r[amt_idx].strip():
+            amt_val = _parse_signed_dec_amount(r[amt_idx])
+        if amt_val is None or amt_val == Decimal("0.00"):
+            continue
+        rows_out.append(
+            {
+                "txn_id": f"CSV-{idx:03d}",
+                "date": _normalize_date_str(raw_date),
+                "description": raw_desc or f"Bank Transaction {idx}",
+                "amount": float(amt_val),
+                "currency": "USD",
+            }
+        )
+    return rows_out
 
+
+def _parse_headerless_bank_csv(parsed_rows: List[List[str]]) -> List[Dict[str, Any]]:
+    rows_out: List[Dict[str, Any]] = []
+    num_pat = re.compile(r"\(?[-+]?\$?\s*\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?\)?-?|\(?[-+]?\$?\s*\d+(?:\.\d{1,2})?\)?-?")
+    for idx, r in enumerate(parsed_rows, start=1):
+        if len(rows_out) >= MAX_BANK_CSV_ROWS:
+            break
+        if len(r) < 2:
+            continue
+        found_date = ""
+        found_amt: Optional[Decimal] = None
+        desc_candidates: List[str] = []
+        for cell in r:
+            c = cell.strip()
+            if not c or c in ("*", "-"):
+                continue
+            if not found_date and _parse_date_opt(c) is not None:
+                found_date = _normalize_date_str(c)
+                continue
+            if found_amt is None and num_pat.fullmatch(c):
+                parsed_a = _parse_signed_dec_amount(c)
+                if parsed_a is not None and parsed_a != Decimal("0.00"):
+                    found_amt = parsed_a
+                    continue
+            if re.search(r"[A-Za-z]{2,}", c):
+                desc_candidates.append(c)
+        if found_amt is None or found_amt == Decimal("0.00"):
+            continue
+        raw_desc = max(desc_candidates, key=len) if desc_candidates else f"Bank Transaction {idx}"
+        rows_out.append(
+            {
+                "txn_id": f"CSV-{idx:03d}",
+                "date": found_date or "2026-10-01",
+                "description": raw_desc,
+                "amount": float(found_amt),
+                "currency": "USD",
+            }
+        )
+    return rows_out
+
+
+def _parse_freetext_bank_lines(lines: List[str]) -> List[Dict[str, Any]]:
+    rows_out: List[Dict[str, Any]] = []
     for idx, line in enumerate(lines, start=1):
         if len(rows_out) >= MAX_BANK_CSV_ROWS:
             break
         amt_matches = _AMOUNT_RE.findall(line)
         if not amt_matches:
             continue
-        amt_val = _parse_abs_dec_amount(amt_matches[-1])
-        if amt_val <= Decimal("0.00"):
+        amt_val = _parse_signed_dec_amount(amt_matches[-1])
+        if amt_val is None or amt_val == Decimal("0.00"):
             continue
         dt_match = _DATE_RE.search(line)
-        dt_val = dt_match.group(1) if dt_match else "2026-10-01"
+        dt_val = _normalize_date_str(dt_match.group(1)) if dt_match else "2026-10-01"
         desc = _AMOUNT_RE.sub("", line)
         if dt_match:
             desc = desc.replace(dt_match.group(0), "")
@@ -113,12 +213,33 @@ def parse_raw_bank_csv_text(raw_text: str) -> List[Dict[str, Any]]:
             {
                 "txn_id": f"TXN-{idx:03d}",
                 "date": dt_val,
-                "description": desc or f"Bank Withdrawal {idx}",
+                "description": desc or f"Bank Transaction {idx}",
                 "amount": float(amt_val),
                 "currency": "USD",
             }
         )
     return rows_out
+
+
+def parse_raw_bank_csv_text(raw_text: str) -> List[Dict[str, Any]]:
+    """Deterministically parse pasted bank CSV or line-delimited statement text into bank_transactions."""
+    text = str(raw_text or "").strip()[:MAX_BANK_CSV_CHARS]
+    if not text:
+        return []
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    delim = _detect_delimiter(lines)
+    if delim is not None:
+        parsed_rows = [r for r in csv.reader(io.StringIO(text), delimiter=delim) if any(c.strip() for c in r)]
+        if parsed_rows:
+            hdr_idx = _find_csv_header_row(parsed_rows)
+            rows_out = (
+                _parse_headered_bank_csv(parsed_rows, hdr_idx)
+                if hdr_idx is not None
+                else _parse_headerless_bank_csv(parsed_rows)
+            )
+            if rows_out:
+                return rows_out
+    return _parse_freetext_bank_lines(lines)
 
 
 def get_mcp_prompt_response(name: str, arguments: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:

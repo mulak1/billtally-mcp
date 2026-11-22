@@ -4,6 +4,7 @@ Combines `STUDIO_RENDER_JS` with event/network/quota controllers (< 400 lines pe
 """
 
 from app.studio_events import STUDIO_EVENTS_JS
+from app.studio_export_js import STUDIO_EXPORT_JS
 from app.studio_render import STUDIO_RENDER_JS
 
 STUDIO_CONTROLLER_JS = """
@@ -50,7 +51,7 @@ STUDIO_CONTROLLER_JS = """
       const txt = document.getElementById('toast-text');
       if (!bar || !txt) return;
       txt.textContent = msg;
-      bar.style.display = 'flex';
+      bar.classList.add('is-visible');
     }
 
     function renderBatchCounter() {
@@ -110,15 +111,12 @@ STUDIO_CONTROLLER_JS = """
       }
     }
 
-    function wipeSessionNow() {
-      RECON_REQ_SEQ += 1;
-      clearInput();
-      LAST_RECON = null;
+    function resetKpiStrip(vendorMsg) {
       const kpiDefaults = {
         'kpi-billed': '$0.00',
         'kpi-computed': '$0.00',
         'kpi-delta': '$0.00',
-        'kpi-vendor': 'Session wiped — ready for next bill',
+        'kpi-vendor': vendorMsg || 'Ready for your bill or bank CSV',
         'kpi-invoice-no': 'No active bill',
         'kpi-status-caption': 'Paste or drop a bill to check',
         'label-corrected-amt': '$0.00',
@@ -131,6 +129,13 @@ STUDIO_CONTROLLER_JS = """
       });
       const deltaEl = document.getElementById('kpi-delta');
       if (deltaEl) deltaEl.style.color = 'var(--text)';
+    }
+
+    function wipeSessionNow() {
+      RECON_REQ_SEQ += 1;
+      clearInput({ focusRaw: true, silent: true });
+      LAST_RECON = null;
+      resetKpiStrip('Session wiped — ready for next bill');
       const noteEl = document.getElementById('supplier-note-box');
       if (noteEl) noteEl.value = '';
       const mailEl = document.getElementById('mailto-link');
@@ -186,8 +191,8 @@ STUDIO_CONTROLLER_JS = """
 
     async function refreshQuota() {
       try {
-        const qUrl = CURRENT_API_KEY ? ('/api/quota?api_key=' + encodeURIComponent(CURRENT_API_KEY)) : '/api/quota';
-        const res = await fetch(qUrl);
+        const headers = CURRENT_API_KEY ? { 'X-API-Key': CURRENT_API_KEY } : {};
+        const res = await fetch('/api/quota', { headers });
         if (!res.ok) return null;
         const q = await res.json();
         document.getElementById('tier-name').textContent = q.tier === 'pro' ? 'Pro Plan' : 'Free Plan';
@@ -234,23 +239,35 @@ STUDIO_CONTROLLER_JS = """
           CURRENT_API_KEY = q.api_key;
           safeSetStorage('bt_pro_api_key', q.api_key);
           await refreshQuota();
+          if (typeof window.gtag === 'function') {
+            window.gtag('event', 'conversion', {
+              send_to: window.__BT_GADS_ID || 'AW-18526471751',
+              value: 49.99,
+              currency: 'USD',
+              transaction_id: checkoutSessionId
+            });
+          }
           showToast('Pro Plan Activated: 5,000 bills/month unlocked.');
         }
       } catch (_e) { await refreshQuota(); }
     }
 
-    function clearInput() {
+    function clearInput(opts) {
+      const cfg = (opts && typeof opts === 'object') ? opts : {};
+      const focusRaw = cfg.focusRaw !== false;
+      const silent = Boolean(cfg.silent);
       const el = document.getElementById('raw-doc-input');
       if (el) {
         el.value = '';
         el.placeholder = 'Paste your supplier bill, receipt, or statement lines here...';
-        el.focus();
+        if (focusRaw) el.focus();
       }
       LAST_EXTRACTED = null;
       BATCH_QUEUE = [];
       renderBatchCounter();
       setActivePresetUi('');
       updateLineCount(true);
+      resetKpiStrip();
       const tableWrap = document.getElementById('table-container');
       if (tableWrap) tableWrap.innerHTML = '';
       const actionsBox = document.getElementById('discrepancy-actions');
@@ -260,7 +277,7 @@ STUDIO_CONTROLLER_JS = """
         banner.className = 'banner banner-warn';
         banner.innerHTML = '<div>Paste or drop a supplier bill on the left and click <strong>Check bill math to the penny</strong>.</div><span class="pill pill-neutral">Ready</span>';
       }
-      showToast('Cleared bill text and batch queue. Paste or drop your own bill to check.');
+      if (!silent) showToast('Cleared bill text and batch queue. Paste or drop your own bill to check.');
     }
 
     async function readAndCheckFile(file) {
@@ -369,9 +386,13 @@ STUDIO_CONTROLLER_JS = """
     function copyVerifiedSummary() {
       if (!LAST_EXTRACTED) { showToast('Check a supplier bill first to copy its summary.'); return; }
       const d = LAST_EXTRACTED;
+      const deltaNum = Number(d.discrepancy_delta || 0);
+      const isManual = !d.math_verified && (Math.abs(deltaNum) < 0.005 || !Array.isArray(d.line_items) || d.line_items.length === 0);
       const verdict = d.math_verified
         ? ('Balanced to the penny (' + fmtMoney(d.total) + ')')
-        : ((Number(d.discrepancy_delta) >= 0 ? 'Overcharge Caught' : 'Under-Billing Caught') + ' (Billed ' + fmtMoney(d.total) + ' vs True Math ' + fmtMoney(d.computed_total) + ')');
+        : (isManual
+          ? ('Manual Review Required (Billed ' + fmtMoney(d.total) + '; review line items)')
+          : ((deltaNum >= 0 ? 'Overcharge Caught' : 'Under-Billing Caught') + ' (Billed ' + fmtMoney(d.total) + ' vs True Math ' + fmtMoney(d.computed_total) + ')'));
       const summary = [
         'BillTally Verified Bill Summary',
         'Supplier: ' + d.vendor + ' (Invoice #' + d.invoice_number + ')',
@@ -386,125 +407,6 @@ STUDIO_CONTROLLER_JS = """
       const box = document.getElementById('supplier-note-box');
       if (box && box.value) copyTextSafe(box.value, 'Copied polite supplier dispute email to your clipboard.');
     }
-
-    async function callReconcileMcp(reqId, argsObj) {
-      const rpcReq = {
-        jsonrpc: "2.0", id: reqId, method: "tools/call",
-        params: { name: "reconcile_invoices_with_bank_ledger", arguments: argsObj }
-      };
-      const res = await fetch('/mcp', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(rpcReq),
-        signal: (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) ? AbortSignal.timeout(15000) : undefined
-      });
-      const rpcRes = await res.json().catch(() => ({}));
-      return { ok: res.ok, rpcRes };
-    }
-
-    async function runCustomBankReconciliation() {
-      const bankCsv = (document.getElementById('bank-csv-input') && document.getElementById('bank-csv-input').value || '').trim().slice(0, 250000);
-      if (!bankCsv) {
-        showToast('Upload or paste your bank statement CSV first — or click "Try October sample (demo data)".');
-        return;
-      }
-      if (!LAST_EXTRACTED) await runExtractMcp();
-      const docs = BATCH_QUEUE.length > 0 ? BATCH_QUEUE : (LAST_EXTRACTED ? [LAST_EXTRACTED] : []);
-      if (docs.length === 0) {
-        showToast('Check at least one supplier bill in Step 1 first.');
-        return;
-      }
-      const useCorr = document.getElementById('mode-corrected') ? document.getElementById('mode-corrected').checked : false;
-      const invoices = docs.map(d => ({
-        invoice_number: d.invoice_number || 'INV-UNKNOWN',
-        vendor: d.vendor || 'Unknown Supplier',
-        date: d.issue_date || '2026-10-01',
-        total: Number(useCorr ? (d.computed_total != null ? d.computed_total : d.total) : d.total) || 0,
-        currency: d.currency || 'USD'
-      }));
-      const mySeq = ++RECON_REQ_SEQ;
-      try {
-        const { ok, rpcRes } = await callReconcileMcp('studio-recon-custom', { invoices, bank_csv_text: bankCsv, date_tolerance_days: 7 });
-        if (mySeq !== RECON_REQ_SEQ) return;
-        if (!ok || rpcRes.error || !rpcRes.result || rpcRes.result.isError || !rpcRes.result.structuredContent) {
-          const rawMsg = (rpcRes.result && rpcRes.result.content && rpcRes.result.content[0] && rpcRes.result.content[0].text) || '';
-          const friendly = (!rawMsg || /validation error|Tool execution error:|bank_transactions/i.test(rawMsg))
-            ? 'Could not read any withdrawals from that bank CSV. Include Date, Description, and Amount columns.'
-            : rawMsg;
-          showToast(friendly);
-          return;
-        }
-        LAST_RECON = rpcRes.result.structuredContent;
-        renderReconResult(LAST_RECON, 'Your Bank Statement Summary', false);
-        showToast('Matched ' + docs.length + ' checked bill(s) against your bank statement CSV.');
-      } catch (err) {
-        if (mySeq === RECON_REQ_SEQ) showToast('Network error during bank statement check: ' + (err && err.message ? err.message : String(err)));
-      }
-    }
-
-    async function runBankReconciliationPreset(scrollToCard) {
-      setActivePresetUi('bank_reconciliation_batch');
-      const detailsEl = document.getElementById('bank-match');
-      if (detailsEl) detailsEl.open = true;
-      const preset = PRESETS['bank_reconciliation_batch'];
-      if (!preset) return;
-      const mySeq = ++RECON_REQ_SEQ;
-      try {
-        const { ok, rpcRes } = await callReconcileMcp('studio-recon-1', {
-          invoices: preset.invoices, bank_transactions: preset.bank_transactions, date_tolerance_days: 7
-        });
-        if (mySeq !== RECON_REQ_SEQ) return;
-        if (!ok || rpcRes.error || !rpcRes.result || rpcRes.result.isError || !rpcRes.result.structuredContent) {
-          showToast('Unable to run October sample bank check.');
-          return;
-        }
-        LAST_RECON = rpcRes.result.structuredContent;
-        renderReconResult(LAST_RECON, 'October Sample Demo Summary', true);
-        showToast('Loaded October sample bank statement (demo data).');
-        if (scrollToCard && detailsEl) detailsEl.scrollIntoView({ behavior: scrollBehaviorPref() });
-      } catch (err) {
-        if (mySeq === RECON_REQ_SEQ) showToast('Network error during bank statement check: ' + (err && err.message ? err.message : String(err)));
-      }
-    }
-
-    async function exportBundle(fmt) {
-      /* Uses /api/export (server-gated equivalent of MCP export_ledger_bundle) */
-      if (!LAST_EXTRACTED) await runExtractMcp();
-      if (!LAST_EXTRACTED) return;
-      const catEl = document.getElementById('category-select');
-      if (catEl) LAST_EXTRACTED.suggested_category = catEl.value;
-      const docsToExport = BATCH_QUEUE.length > 0 ? BATCH_QUEUE : [LAST_EXTRACTED];
-      const freeExportsUsed = Number(safeGetStorage('bt_free_exports_used') || '0');
-      const upgradeHtml = 'Free tier includes 3 spreadsheet exports (up to 3 bills). <a href="https://buy.stripe.com/bJedR9cK12BN90903MfAc01" target="_blank" rel="noopener noreferrer" style="color:var(--positive); font-weight:600; text-decoration:underline;">Unlock $49.99 One-Time Pro Pass →</a>';
-      if (!CURRENT_API_KEY && (docsToExport.length > 3 || freeExportsUsed >= 3)) {
-        document.getElementById('download-status').innerHTML = upgradeHtml;
-        showToast('Unlock the $49.99 One-Time Pro Pass for unlimited multi-bill Excel & QuickBooks exports.');
-        return;
-      }
-      const useCorrected = document.getElementById('mode-corrected') ? document.getElementById('mode-corrected').checked : false;
-      const slug = String(LAST_EXTRACTED.invoice_number || 'checked_bills').toLowerCase();
-      const payload = { documents: docsToExport, reconciliation: LAST_RECON, format: fmt, bundle_name: slug + "_ledger", use_corrected_amounts: useCorrected, api_key: CURRENT_API_KEY };
-      try {
-        const res = await fetch('/api/export', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), signal: (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) ? AbortSignal.timeout(25000) : undefined });
-        const out = await res.json().catch(() => ({}));
-        if (res.status === 402) {
-          document.getElementById('download-status').innerHTML = upgradeHtml;
-          showToast(out.detail || 'Free export limit reached. Unlock the $49.99 One-Time Pro Pass.');
-          return;
-        }
-        if (!res.ok || !out || !out.download_url) {
-          showToast(out.detail || 'Unable to generate spreadsheet export.');
-          return;
-        }
-        if (!CURRENT_API_KEY) safeSetStorage('bt_free_exports_used', String(freeExportsUsed + 1));
-        const safeHref = safeDownloadHref(out.download_url);
-        document.getElementById('download-status').innerHTML =
-          'Your spreadsheet <strong>' + escHtml(out.filename) + '</strong> (' + Number(out.size_bytes) + ' bytes, SHA-256 verified) is ready: <a href="' + escHtml(safeHref) + '" style="color:var(--chart-3); text-decoration:underline;">Click here to download</a>';
-        showToast('Spreadsheet ' + out.filename + ' generated and ready to download.');
-      } catch (err) {
-        showToast('Export failed: ' + (err && err.message ? err.message : String(err)));
-      }
-    }
 """
 
-STUDIO_CLIENT_JS = STUDIO_RENDER_JS + "\n" + STUDIO_CONTROLLER_JS + "\n" + STUDIO_EVENTS_JS
+STUDIO_CLIENT_JS = STUDIO_RENDER_JS + "\n" + STUDIO_CONTROLLER_JS + "\n" + STUDIO_EXPORT_JS + "\n" + STUDIO_EVENTS_JS

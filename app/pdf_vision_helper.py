@@ -1,7 +1,7 @@
 """
 Multimodal Invoice & Statement File Helper for BillTally (`POST /api/extract-file`).
 Extracts clean structured invoice lines locally from digital `.pdf`, `.xlsx`, `.csv`, and `.txt`,
-or falls back to Gemini 3.5 Flash-Lite Vision when `GEMINI_API_KEY` is set (`< 250` lines).
+or falls back to Gemini 3.5 Flash-Lite Vision when `GEMINI_API_KEY` is set.
 """
 
 from __future__ import annotations
@@ -97,8 +97,26 @@ def extract_pdf_text_local(raw_bytes: bytes) -> str:
         r"|<([0-9A-Fa-f\s]+)>\s*Tj|(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+T[dD]|\b(?:T\*|ET)\b"
     )
     lit_or_kern_re = re.compile(r"\(((?:\\.|[^\\()])*)\)|<([0-9A-Fa-f\s]+)>|(-?\d+(?:\.\d+)?)")
-    for sm in re.finditer(rb"stream(?:\r\n|\n)(.*?)(?:\r\n|\n)?endstream", raw_bytes, flags=re.DOTALL):
-        chunk = sm.group(1)
+    pos = 0
+    stream_count = 0
+    while stream_count < 512:
+        s_idx = raw_bytes.find(b"stream", pos)
+        if s_idx == -1:
+            break
+        body_start = s_idx + 6
+        if raw_bytes[body_start : body_start + 2] == b"\r\n":
+            body_start += 2
+        elif raw_bytes[body_start : body_start + 1] == b"\n":
+            body_start += 1
+        else:
+            pos = body_start
+            continue
+        e_idx = raw_bytes.find(b"endstream", body_start)
+        if e_idx == -1:
+            break
+        pos = e_idx + 9
+        stream_count += 1
+        chunk = raw_bytes[body_start:e_idx].rstrip(b"\r\n")
         candidates = [chunk]
         for wbits in (zlib.MAX_WBITS, -zlib.MAX_WBITS):
             try:
@@ -269,10 +287,24 @@ def extract_invoice_text_from_upload(
         try:
             with zipfile.ZipFile(io.BytesIO(raw_bytes)) as zf:
                 infos = zf.infolist()
-        except zipfile.BadZipFile as exc:
+                if len(infos) > MAX_XLSX_ENTRIES:
+                    raise ValueError("Excel (.xlsx) archive exceeds safe entry or uncompressed size limits.")
+                real_total = 0
+                for info in infos:
+                    member_total = 0
+                    with zf.open(info, "r") as zmember:
+                        while True:
+                            chunk = zmember.read(65536)
+                            if not chunk:
+                                break
+                            real_total += len(chunk)
+                            member_total += len(chunk)
+                            if real_total > MAX_XLSX_UNCOMPRESSED_BYTES:
+                                raise ValueError("Excel (.xlsx) archive exceeds safe entry or uncompressed size limits.")
+                            if info.filename.lower().endswith("sharedstrings.xml") and member_total > 2_000_000:
+                                raise ValueError("Excel (.xlsx) archive exceeds safe sharedStrings size limit.")
+        except (zipfile.BadZipFile, zipfile.LargeZipFile, RuntimeError, zlib.error, EOFError, NotImplementedError) as exc:
             raise ValueError("Invalid or corrupt Excel (.xlsx) workbook.") from exc
-        if len(infos) > MAX_XLSX_ENTRIES or sum(max(0, z.file_size) for z in infos) > MAX_XLSX_UNCOMPRESSED_BYTES:
-            raise ValueError("Excel (.xlsx) archive exceeds safe entry or uncompressed size limits.")
         try:
             wb = openpyxl.load_workbook(io.BytesIO(raw_bytes), read_only=True, data_only=True)
             try:

@@ -101,11 +101,13 @@ def _build_audit_memo(doc: Dict[str, Any], use_corrected_amounts: bool) -> str:
     billed = _to_dec(doc.get("total", 0))
     computed = _to_dec(doc.get("computed_total", billed))
     diff = abs(billed - computed)
-    if billed >= computed:
+    if billed > computed:
         prefix = "Short-Pay Adjusted" if use_corrected_amounts else "Discrepancy Flagged"
         return f"{prefix}: Billed ${billed:.2f} vs True Math ${computed:.2f} (Saved ${diff:.2f} on disputed line items)"
-    prefix = "True-Math Adjusted" if use_corrected_amounts else "Under-Billing Flagged"
-    return f"{prefix}: Billed ${billed:.2f} vs True Math ${computed:.2f} (Under-billed by ${diff:.2f} vs line items)"
+    if billed < computed:
+        prefix = "True-Math Adjusted" if use_corrected_amounts else "Under-Billing Flagged"
+        return f"{prefix}: Billed ${billed:.2f} vs True Math ${computed:.2f} (Under-billed by ${diff:.2f} vs line items)"
+    return f"Manual Review Required: Billed ${billed:.2f} (unparsed or offsetting line-item differences)"
 
 
 def _doc_status_label(doc: Dict[str, Any]) -> str:
@@ -113,7 +115,11 @@ def _doc_status_label(doc: Dict[str, Any]) -> str:
         return "Balanced"
     billed = _to_dec(doc.get("total", 0))
     computed = _to_dec(doc.get("computed_total", billed))
-    return "Overcharge Flagged" if billed >= computed else "Under-Billed Flagged"
+    if billed > computed:
+        return "Overcharge Flagged"
+    if billed < computed:
+        return "Under-Billed Flagged"
+    return "Manual Review"
 
 
 def _build_xlsx_bytes(
@@ -458,3 +464,40 @@ def export_ledger_bundle(
         row_count=row_count,
         formulas_embedded=formulas,
     )
+
+
+def export_bank_transactions_qbo_csv(
+    bank_transactions: List[Dict[str, Any]],
+    bundle_name: str = "bank_statement_qbo",
+) -> Dict[str, Any]:
+    """Export parsed bank statement transactions directly into QuickBooks Online 3-column CSV (`Date,Description,Amount`)."""
+    if not bank_transactions:
+        raise ValueError("No bank statement transactions found to export.")
+    if len(bank_transactions) > MAX_EXPORT_RECON_ROWS:
+        raise ValueError(f"Export exceeds maximum {MAX_EXPORT_RECON_ROWS} bank rows.")
+    s_buf = io.StringIO()
+    writer = csv.writer(s_buf)
+    writer.writerow(["Date", "Description", "Amount"])
+    for txn in bank_transactions:
+        raw_dt = str(txn.get("date", "")).strip()
+        # Format ISO YYYY-MM-DD as MM/DD/YYYY for QuickBooks Online CSV import
+        if len(raw_dt) == 10 and raw_dt[4] == "-" and raw_dt[7] == "-":
+            qbo_date = f"{raw_dt[5:7]}/{raw_dt[8:10]}/{raw_dt[0:4]}"
+        else:
+            qbo_date = raw_dt
+        desc = _safe_cell_text(str(txn.get("description", "")).strip())
+        amt = _to_dec(txn.get("amount", 0))
+        writer.writerow([_safe_cell_text(qbo_date), desc, f"{amt:.2f}"])
+    raw_bytes = s_buf.getvalue().encode("utf-8")
+    digest = hashlib.sha256(raw_bytes).hexdigest()
+    safe_base = sanitize_export_filename(bundle_name)
+    filename = f"{safe_base}_{secrets.token_hex(12)}.csv"
+    put_ephemeral_export(filename, raw_bytes)
+    return {
+        "filename": filename,
+        "format": "quickbooks_bank_csv",
+        "download_url": f"/downloads/{filename}",
+        "size_bytes": len(raw_bytes),
+        "sha256_checksum": digest,
+        "row_count": len(bank_transactions),
+    }

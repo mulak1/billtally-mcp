@@ -292,13 +292,13 @@ def test_edge_cases_malformed_audit_zero_total_fifo_eviction_dde_and_bank_csv(cl
     assert parse_raw_bank_csv_text("") == []
     assert parse_raw_bank_csv_text("Date,Description,Amount\n") == []
     quoted = parse_raw_bank_csv_text('Date,Description,Amount\n2026-10-03,"ACME, INC.","($1,250.00)"\n2026-10-04,ZERO,0.00\n2026-10-05,BAD,N/A\n')
-    assert len(quoted) == 1 and quoted[0]["description"] == "ACME, INC." and quoted[0]["amount"] == pytest.approx(1250.0)
+    assert len(quoted) == 1 and quoted[0]["description"] == "ACME, INC." and quoted[0]["amount"] == pytest.approx(-1250.0)
     tsv = parse_raw_bank_csv_text("Date\tDescription\tAmount\n2026-10-08\tMETRO ELECTRIC\t-$400.00\n")
-    assert len(tsv) == 1 and tsv[0]["amount"] == pytest.approx(400.0)
+    assert len(tsv) == 1 and tsv[0]["amount"] == pytest.approx(-400.0)
     headerless_tsv = parse_raw_bank_csv_text("2026-10-08\tMETRO ELECTRIC\t$1,400.00\n2026-10-09\tVALLEY LINEN\t1250.00-\n")
     assert len(headerless_tsv) == 2
     assert headerless_tsv[0]["amount"] == pytest.approx(1400.0)
-    assert headerless_tsv[1]["amount"] == pytest.approx(1250.0)
+    assert headerless_tsv[1]["amount"] == pytest.approx(-1250.0)
 
     # 5. Server-side integrity recomputation blocks spoofed math_verified=True + checks privacy headers & 128-bit ID
     spoof_res = client.post(
@@ -351,4 +351,200 @@ def test_edge_cases_malformed_audit_zero_total_fifo_eviction_dde_and_bank_csv(cl
     assert omit_res.status_code == 200
     omit_sc = omit_res.json()["result"]["structuredContent"]
     assert omit_sc["reconciliation"]["summary_metrics"]["matched_count"] == 1
+
+
+def test_adversarial_security_math_cro_and_seo_hardening(client: TestClient):
+    from app.extractor import extract_financial_document
+    from app.mcp_compound import parse_raw_bank_csv_text
+    from app.models import ExtractDocumentRequest, ReconcileLedgerRequest
+    from app.pdf_vision_helper import extract_pdf_text_local
+    from app.reconciler import reconcile_invoices_with_bank_ledger
+
+    # 1. Security: GET /api/quota never leaks api_key even after Pro upgrade
+    client.post("/api/quota/upgrade", params={"workspace_id": "sec-leak-ws"})
+    q_status = client.get("/api/quota", params={"workspace_id": "sec-leak-ws"}).json()
+    assert q_status["tier"] == "pro"
+    assert q_status["api_key"] is None
+
+    # 2. Security: PDF stream parser runs in O(N) without ReDoS on pathological input
+    evil_pdf = b"%PDF-1.4\n" + (b"stream\n" * 4000) + b"endobj"
+    t0 = time.monotonic()
+    extract_pdf_text_local(evil_pdf)
+    assert (time.monotonic() - t0) < 0.25
+
+    # 3. Accounting & Math: US MM/DD/YYYY dates, Chase debit/refund polarity, BofA summary headers, Wells Fargo headerless
+    bofa_csv = (
+        "Description,,Summary Amt.\n"
+        "Beginning balance as of 03/01/2026,,10000.00\n"
+        "Date,Description,Amount,Running Bal.\n"
+        "03/15/2026,POS PURCHASE STARBUCKS,-12.50,9987.50\n"
+        "03/16/2026,REFUND STARBUCKS,12.50,10000.00\n"
+    )
+    bofa_txns = parse_raw_bank_csv_text(bofa_csv)
+    assert len(bofa_txns) == 2
+    assert bofa_txns[0]["date"] == "2026-03-15"
+    assert bofa_txns[0]["amount"] == pytest.approx(-12.50)
+    assert bofa_txns[1]["amount"] == pytest.approx(12.50)
+    # Opposite signs (debit + refund) must NEVER be flagged as duplicate charges, and US invoice dates match
+    recon_refund = reconcile_invoices_with_bank_ledger(
+        ReconcileLedgerRequest(
+            invoices=[{"invoice_number": "INV-SB", "vendor": "Starbucks", "date": "03/15/2026", "total": 12.50}],
+            bank_transactions=bofa_txns,
+        )
+    )
+    assert recon_refund.summary_metrics["matched_count"] == 1
+    assert recon_refund.summary_metrics["duplicate_count"] == 0
+
+    wf_csv = '"03/20/2026","-450.00","*","","ACME PLUMBING SERVICES"\n'
+    wf_txns = parse_raw_bank_csv_text(wf_csv)
+    assert len(wf_txns) == 1
+    assert wf_txns[0]["date"] == "2026-03-20"
+    assert wf_txns[0]["amount"] == pytest.approx(-450.00)
+    assert "ACME PLUMBING" in wf_txns[0]["description"]
+
+    # 4. Accounting & Math: Sales Tax 8.25%: $16.50, Total\n1., Amount Due, and 0-line-item unparsed document
+    tax_bill = (
+        "Vendor: Metro Supply\nInvoice Number: INV-TAX-1\nDate: 03/15/2026\n"
+        "Description   Qty   Price   Total\n"
+        "1. Copper Fittings 2 x $100.00 = $200.00\n"
+        "Subtotal: $200.00\n"
+        "Sales Tax 8.25%: $16.50\n"
+        "Amount Due: $216.50\n"
+    )
+    parsed_tax = extract_financial_document(ExtractDocumentRequest(raw_text=tax_bill))
+    assert parsed_tax.issue_date == "2026-03-15"
+    assert parsed_tax.tax == pytest.approx(16.50)
+    assert parsed_tax.total == pytest.approx(216.50)
+    assert parsed_tax.math_verified is True
+
+    unparsed = extract_financial_document(ExtractDocumentRequest(raw_text="Vendor: Mystery Co\nPlease remit $999.00 for services.\nAmount Due: $999.00\n"))
+    assert unparsed.math_verified is False
+
+    # 5. CRO: Direct Bank CSV -> QuickBooks 3-Column CSV export (real user rows, DDE-safe, MM/DD/YYYY)
+    qbo_res = client.post(
+        "/api/bank-csv-export",
+        json={"bank_csv_text": 'Date,Description,Amount\n2026-03-15,"=CMD|calc",-45.00\n03/16/2026,STRIPE DEPOSIT,500.00\n'},
+    )
+    assert qbo_res.status_code == 200
+    qbo_dl = client.get(qbo_res.json()["download_url"])
+    assert qbo_dl.status_code == 200
+    assert "Date,Description,Amount" in qbo_dl.text
+    assert "03/15/2026,'=CMD|calc,-45.00" in qbo_dl.text
+    assert "03/16/2026,STRIPE DEPOSIT,500.00" in qbo_dl.text
+
+    # 6. CRO & Google Ads: gtag.js + CSP allowlist + gclid preservation + Check2QBO below FAQ
+    landing = client.get("/convert/bank-statement-to-qbo-csv?gclid=EAIaIQobTest123")
+    assert landing.status_code == 200
+    assert "AW-18526471751" in landing.text
+    assert "mode=upload&amp;gclid=EAIaIQobTest123" in landing.text
+    assert "https://www.googletagmanager.com" in landing.headers.get("content-security-policy", "")
+    assert landing.text.index("Frequently Asked Questions") < landing.text.index("Try Check2QBO")
+
+    # 7. SEO, MCP Spec & Reliability: canonical/meta on /, JSON-RPC id:null -> 200, www 301 redirect, robots.txt
+    home = client.get("/")
+    assert '<meta name="description"' in home.text
+    assert '<link rel="canonical"' in home.text
+    assert 'application/ld+json' in home.text
+    assert "AW-18526471751" in home.text
+
+    ping_null = client.post("/mcp", json={"jsonrpc": "2.0", "id": None, "method": "ping"})
+    assert ping_null.status_code == 200
+    assert ping_null.json()["id"] is None
+
+    www_resp = client.get("/docs", headers={"host": "www.billtally.app"}, follow_redirects=False)
+    assert www_resp.status_code == 301
+    assert www_resp.headers["location"] == "https://billtally.app/docs"
+
+    robots = client.get("/robots.txt").text
+    assert "Disallow: /downloads/" in robots
+    assert "Disallow: /analytics" in robots
+
+    # 8. Goldfish R2 Verification Gaps: Stripe <4999/non-USD, 4th bank-csv-export -> 402, XLSX >2MB sharedStrings,
+    #    unregistered OAuth client_id -> 400, multi-line TSV title header, zero-delta unparsed summary
+    import hashlib
+    import hmac
+    import json
+    from unittest.mock import patch
+    import zipfile
+    from app.pdf_vision_helper import extract_invoice_text_from_upload
+    from app.stripe_verify import verify_paid_stripe_checkout_session
+
+    # 8a. Stripe webhook rejects <4999 and non-USD
+    ts_now = str(int(time.time()))
+    for bad_obj in (
+        {"id": "cs_live_underpaid_1", "payment_status": "paid", "currency": "usd", "amount_total": 100},
+        {"id": "cs_live_wrong_curr_1", "payment_status": "paid", "currency": "eur", "amount_total": 4999},
+    ):
+        wh_body = json.dumps({"type": "checkout.session.completed", "data": {"object": bad_obj}}).encode("utf-8")
+        wh_sig = hmac.new(b"whsec_test_gap", f"{ts_now}.".encode("utf-8") + wh_body, hashlib.sha256).hexdigest()
+        with patch.dict("os.environ", {"STRIPE_WEBHOOK_SECRET": "whsec_test_gap"}):
+            r_bad = client.post("/webhooks/stripe", content=wh_body, headers={"Stripe-Signature": f"t={ts_now},v1={wh_sig}"})
+            assert r_bad.status_code == 200
+            assert "tier" not in r_bad.json()
+
+    # 8b. verify_paid_stripe_checkout_session rejects incomplete status and underpaid amounts
+    class _FakeResp:
+        status = 200
+        def __init__(self, payload: dict):
+            self._b = json.dumps(payload).encode("utf-8")
+        def read(self):
+            return self._b
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+
+    with patch.dict("os.environ", {"STRIPE_SECRET_KEY": "sk_test_gap"}):
+        with patch("app.stripe_verify.urllib.request.urlopen", return_value=_FakeResp({"id": "cs_live_open_100000001", "status": "open", "payment_status": "paid", "currency": "usd", "amount_total": 4999})):
+            assert verify_paid_stripe_checkout_session("cs_live_open_100000001") is False
+        with patch("app.stripe_verify.urllib.request.urlopen", return_value=_FakeResp({"id": "cs_live_1dollar_000001", "status": "complete", "payment_status": "paid", "currency": "usd", "amount_total": 100})):
+            assert verify_paid_stripe_checkout_session("cs_live_1dollar_000001") is False
+        with patch("app.stripe_verify.urllib.request.urlopen", return_value=_FakeResp({"id": "cs_live_valid_4999_0001", "status": "complete", "payment_status": "paid", "currency": "usd", "amount_total": 4999})):
+            assert verify_paid_stripe_checkout_session("cs_live_valid_4999_0001") is True
+
+    # 8c. 4th free /api/bank-csv-export call returns HTTP 402
+    csv_body = {"bank_csv_text": "Date,Description,Amount\n03/15/2026,STARBUCKS,-12.50\n", "workspace_id": "bank-cap-ws"}
+    for _ in range(3):
+        assert client.post("/api/bank-csv-export", json=csv_body).status_code == 200
+    assert client.post("/api/bank-csv-export", json=csv_body).status_code == 402
+
+    # 8d. XLSX zip bomb (>2MB sharedStrings.xml) rejected
+    zbuf = io.BytesIO()
+    with zipfile.ZipFile(zbuf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("xl/sharedStrings.xml", "A" * 2_100_000)
+        zf.writestr("xl/worksheets/sheet1.xml", "<worksheet/>")
+    with pytest.raises(ValueError, match="sharedStrings"):
+        extract_invoice_text_from_upload("bomb.xlsx", zbuf.getvalue())
+
+    # 8e. Unregistered client_id rejected on /oauth/authorize
+    r_unreg = client.get(
+        "/oauth/authorize",
+        params={
+            "response_type": "code",
+            "client_id": "unregistered-evil-client",
+            "redirect_uri": "https://evil.example.com/cb",
+            "code_challenge": "a" * 43,
+            "code_challenge_method": "S256",
+        },
+    )
+    assert r_unreg.status_code == 400
+
+    # 8f. Multi-line TSV with title header uses tab delimiter (does not extract running balance)
+    tsv_titled = "Checking Statement March 2026\nDate\tDescription\tAmount\tRunning Bal.\n03/15/2026\tSTARBUCKS\t-12.50\t9987.50\n"
+    tsv_txns = parse_raw_bank_csv_text(tsv_titled)
+    assert len(tsv_txns) == 1 and tsv_txns[0]["amount"] == pytest.approx(-12.50)
+
+    # 8g. Zero-delta unparsed document reports computed_total == total, delta == 0, and manual-review summary
+    assert unparsed.discrepancy_delta == pytest.approx(0.0)
+    assert unparsed.computed_total == pytest.approx(999.0)
+    assert "Manual review required" in unparsed.plain_english_summary
+    assert "under-billed" not in unparsed.plain_english_summary
+
+    # 8h. Colliding CSV header ("Payment Date,Description,Amount") does not turn date into dollar amount
+    colliding = parse_raw_bank_csv_text("Payment Date,Description,Amount\n03/15/2026,ACME SUPPLY,-125.00\n")
+    assert len(colliding) == 1
+    assert colliding[0]["date"] == "2026-03-15"
+    assert colliding[0]["amount"] == pytest.approx(-125.00)
+
+
 

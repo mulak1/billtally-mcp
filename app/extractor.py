@@ -108,26 +108,46 @@ def _infer_category(vendor: str, text: str) -> str:
     return "General Operating Expense"
 
 
+_DATE_PARSE_FORMATS = ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y", "%m-%d-%Y", "%Y/%m/%d")
+
+
+def _normalize_doc_date(raw: str) -> str:
+    s = str(raw or "").strip()
+    if not s:
+        return ""
+    for fmt in _DATE_PARSE_FORMATS:
+        try:
+            return datetime.strptime(s, fmt).date().isoformat()
+        except ValueError:
+            continue
+    return s[:32]
+
+
 def _compute_payment_terms(issue_date: str, due_date: Optional[str]) -> str:
     if not due_date:
         return "Due on Receipt"
+    iso1 = _normalize_doc_date(issue_date)[:10]
+    iso2 = _normalize_doc_date(due_date)[:10]
     try:
-        d1 = datetime.strptime(issue_date[:10], "%Y-%m-%d").date()
-        d2 = datetime.strptime(due_date[:10], "%Y-%m-%d").date()
+        d1 = datetime.strptime(iso1, "%Y-%m-%d").date()
+        d2 = datetime.strptime(iso2, "%Y-%m-%d").date()
         days = (d2 - d1).days
         if days > 0:
-            return f"Net {days} (Due {due_date[:10]})"
+            return f"Net {days} (Due {iso2})"
     except ValueError:
         pass
-    return f"Due {due_date[:10]}"
+    return f"Due {iso2}"
+
+
+_CURR_NUM = r"(?:\(?-?[ \t]*[$€£]?[ \t]*-?[\d,]+(?:\.\d+)?\)?-?)"
 
 
 def _parse_line_items_from_text(text: str) -> List[Dict[str, Any]]:
     """Extract line items from pipe-delimited rows, markdown tables, tab/space columns, or natural lines."""
     items: List[Dict[str, Any]] = []
     explicit_pipe = re.compile(
-        r"^(?:\d+[\.\)]\s*)?(?P<desc>[^|\n]+?)\s*\|\s*Qty:\s*(?P<qty>-?\d+(?:\.\d+)?)\s*\|\s*"
-        r"Unit Price:\s*(?P<unit>-?\s*[$€£]?\s*-?[\d,]+(?:\.\d+)?)\s*\|\s*Amount:\s*(?P<amt>-?\s*[$€£]?\s*-?[\d,]+(?:\.\d+)?)",
+        rf"^(?:\d+[\.\)]\s*)?(?P<desc>[^|\n]+?)\s*\|\s*Qty:\s*(?P<qty>-?\d+(?:\.\d+)?)\s*\|\s*"
+        rf"Unit Price:\s*(?P<unit>{_CURR_NUM})\s*\|\s*Amount:\s*(?P<amt>{_CURR_NUM})",
         flags=re.IGNORECASE | re.MULTILINE,
     )
     for m in explicit_pipe.finditer(text):
@@ -143,8 +163,8 @@ def _parse_line_items_from_text(text: str) -> List[Dict[str, Any]]:
         return items
 
     md_row = re.compile(
-        r"^\s*\|\s*(?P<desc>[^|\n]+?)\s*\|\s*(?P<qty>-?\d+(?:\.\d+)?)\s*\|\s*"
-        r"[$€£]?(?P<unit>-?[\d,]+(?:\.\d+)?)\s*\|\s*[$€£]?(?P<amt>-?[\d,]+(?:\.\d+)?)\s*\|\s*$",
+        rf"^\s*\|\s*(?P<desc>[^|\n]+?)\s*\|\s*(?P<qty>-?\d+(?:\.\d+)?)\s*\|\s*"
+        rf"(?P<unit>{_CURR_NUM})\s*\|\s*(?P<amt>{_CURR_NUM})\s*\|\s*$",
         flags=re.MULTILINE,
     )
     for m in md_row.finditer(text):
@@ -163,9 +183,10 @@ def _parse_line_items_from_text(text: str) -> List[Dict[str, Any]]:
         return items
 
     inline_pat = re.compile(
-        r"^(?:\d+[\.\)]\s*)?(?P<desc>[A-Za-z0-9][^\n:]+?)\s+(?P<qty>\d+(?:\.\d+)?)\s*(?:[x×@]|\s{2,}|\t)\s*"
-        r"[$€£]?(?P<unit>-?[\d,]+(?:\.\d+)?)\s*(?:=|\s{2,}|\t|\s+)\s*[$€£]?(?P<amt>-?[\d,]+(?:\.\d+)?)\s*$",
-        flags=re.MULTILINE,
+        rf"^(?:\d+[\.\)]\s*)?(?P<desc>[A-Za-z0-9][^\n:]+?)[ \t]+(?P<qty>-?\d+(?:\.\d+)?)"
+        rf"(?:[ \t]*(?:hrs?|hours?|ea|each|units?|lbs?|days?|pcs?))?[ \t]*(?:[x×@]|[ \t]{{2,}}|\t)[ \t]*"
+        rf"(?P<unit>{_CURR_NUM})[ \t]*(?:=|[ \t]{{2,}}|\t|[ \t]+)[ \t]*(?P<amt>{_CURR_NUM})[ \t]*$",
+        flags=re.MULTILINE | re.IGNORECASE,
     )
     for m in inline_pat.finditer(text):
         items.append(
@@ -180,15 +201,33 @@ def _parse_line_items_from_text(text: str) -> List[Dict[str, Any]]:
 
 
 def _extract_totals(text: str, raw_items: List[Dict[str, Any]]) -> Tuple[Decimal, Decimal, Decimal]:
-    """Extract reported subtotal, tax, and total from text with sensible fallbacks."""
-    sub_match = re.search(r"\bSubtotal\s*[:\-]?\s*(-?\s*[$€£]?\s*-?[\d,]+(?:\.\d+)?)", text, re.IGNORECASE)
-    tax_match = re.search(r"\bTax(?:\s*\([^\)]+\))?\s*[:\-]?\s*(-?\s*[$€£]?\s*-?[\d,]+(?:\.\d+)?)", text, re.IGNORECASE)
-    tot_match = re.search(r"\b(?:Grand\s+)?Total(?:\s+Due|\s+Amount)?\s*[:\-]?\s*(-?\s*[$€£]?\s*-?[\d,]+(?:\.\d+)?)", text, re.IGNORECASE)
+    """Extract reported subtotal, tax, and total from text using horizontal whitespace and bottom-up precedence."""
+    val_pat = r"(\(?-?[ \t]*[$€£]?[ \t]*-?[\d,]+(?:\.\d+)?\)?-?)"
+    sub_matches = re.findall(
+        rf"\bSubtotal[ \t]*[:\-]?[ \t]*{val_pat}",
+        text,
+        flags=re.IGNORECASE,
+    )
+    tax_matches = re.findall(
+        rf"\b(?:Sales[ \t]+)?Tax(?:[ \t]*\([^\)\n]+\)|[ \t]*@?[ \t]*\d+(?:\.\d+)?%)?[ \t]*[:\-]?[ \t]*{val_pat}",
+        text,
+        flags=re.IGNORECASE,
+    )
+    tot_matches = re.findall(
+        rf"\b(?:(?:Grand[ \t]+|Invoice[ \t]+)?Total(?:[ \t]+Due|[ \t]+Amount)?|Amount[ \t]+Due|Balance[ \t]+Due|Net[ \t]+Payable)[ \t]*[:\-][ \t]*{val_pat}"
+        rf"|\b(?:Grand[ \t]+Total|Total[ \t]+Due|Amount[ \t]+Due|Balance[ \t]+Due|Net[ \t]+Payable)[ \t]+{val_pat}",
+        text,
+        flags=re.IGNORECASE,
+    )
 
     item_sum = sum((_to_dec(i["amount"]) for i in raw_items), Decimal("0.00"))
-    subtotal = _to_dec(sub_match.group(1)) if sub_match else item_sum
-    tax = _to_dec(tax_match.group(1)) if tax_match else Decimal("0.00")
-    total = _to_dec(tot_match.group(1)) if tot_match else (subtotal + tax)
+    subtotal = _to_dec(sub_matches[-1]) if sub_matches else item_sum
+    tax = _to_dec(tax_matches[-1]) if tax_matches else Decimal("0.00")
+    tot_str = ""
+    if tot_matches:
+        last_t = tot_matches[-1]
+        tot_str = last_t[0] or last_t[1] if isinstance(last_t, tuple) else last_t
+    total = _to_dec(tot_str) if tot_str else (subtotal + tax)
     return subtotal, tax, total
 
 
@@ -224,9 +263,18 @@ def extract_financial_document(
             [r"Invoice(?:\s+Number|\s*#)?\s*:\s*([A-Za-z0-9\-_]+)", r"Statement\s*#\s*:\s*([A-Za-z0-9\-_]+)"],
             "INV-UNNUMBERED",
         )[:120]
-        issue_date = _extract_header_field(text, [r"(?:Issue\s+)?Date\s*:\s*(\d{4}-\d{2}-\d{2})"], "2026-10-01")
-        due_raw = _extract_header_field(text, [r"Due\s+Date\s*:\s*(\d{4}-\d{2}-\d{2})"], "")
-        due_date = due_raw if due_raw else None
+        issue_date_raw = _extract_header_field(
+            text,
+            [r"(?:Issue\s+|Invoice\s+)?Date\s*:\s*(\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{2,4}|\d{1,2}-\d{1,2}-\d{4})"],
+            "2026-10-01",
+        )
+        issue_date = _normalize_doc_date(issue_date_raw) or "2026-10-01"
+        due_raw = _extract_header_field(
+            text,
+            [r"Due\s+Date\s*:\s*(\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{2,4}|\d{1,2}-\d{1,2}-\d{4})"],
+            "",
+        )
+        due_date = _normalize_doc_date(due_raw) if due_raw else None
         currency = (req.currency_hint or _extract_header_field(text, [r"Currency\s*:\s*([A-Z]{3})"], "USD")).strip().upper()[:10] or "USD"
         raw_items = _parse_line_items_from_text(text)
         subtotal, tax, total = _extract_totals(text, raw_items)
@@ -275,11 +323,19 @@ def extract_financial_document(
                 )
             )
 
-    if not normalized_items and subtotal > Decimal("0.00"):
-        computed_subtotal = subtotal
+    unparsed_lines = (
+        structured is None
+        and len(normalized_items) == 0
+        and (total != Decimal("0.00") or subtotal != Decimal("0.00") or bool(re.search(r"[$€£]\s*\d+", req.raw_text)))
+    )
+    if not normalized_items:
+        if subtotal > Decimal("0.00"):
+            computed_subtotal = subtotal
+        elif unparsed_lines and total != Decimal("0.00"):
+            computed_subtotal = (total - tax).quantize(_CENT, rounding=ROUND_HALF_UP)
 
     subtotal_delta = (subtotal - computed_subtotal).quantize(_CENT, rounding=ROUND_HALF_UP)
-    if abs(subtotal_delta) > tol:
+    if not unparsed_lines and abs(subtotal_delta) > tol:
         discrepancies.append(
             MathDiscrepancy(
                 field="subtotal",
@@ -296,7 +352,7 @@ def extract_financial_document(
 
     computed_total = (computed_subtotal + tax).quantize(_CENT, rounding=ROUND_HALF_UP)
     total_delta = (total - computed_total).quantize(_CENT, rounding=ROUND_HALF_UP)
-    if abs(total_delta) > tol:
+    if not unparsed_lines and abs(total_delta) > tol:
         discrepancies.append(
             MathDiscrepancy(
                 field="total",
@@ -308,6 +364,18 @@ def extract_financial_document(
                     f"Total difference: true subtotal (${computed_subtotal:,.2f}) + tax (${tax:,.2f}) "
                     f"= ${computed_total:,.2f}, but the bill asks for ${total:,.2f} (${total_delta:+,.2f})."
                 ),
+            )
+        )
+
+    if unparsed_lines:
+        discrepancies.append(
+            MathDiscrepancy(
+                field="line_items",
+                expected=float(computed_total),
+                reported=float(total),
+                delta=0.0,
+                severity="MEDIUM",
+                explanation="No structured Qty × Unit Price line items could be parsed from this document; manual verification is required before approving.",
             )
         )
 
@@ -347,6 +415,24 @@ def extract_financial_document(
             f"({currency} ${total:,.2f}). Ready to approve and export."
         )
         dispute_note = None
+    elif unparsed_lines:
+        plain_summary = (
+            f"Manual review required: no structured Qty × Unit Price line items could be parsed "
+            f"from this bill ({vendor}, ${total:,.2f})."
+        )
+        dispute_note = None
+    elif total_delta == Decimal("0.00"):
+        plain_summary = (
+            f"Review line items: individual rows on this bill from {vendor} have math discrepancies "
+            f"that offset to $0.00 (total ${total:,.2f})."
+        )
+        bullet_lines = "\n".join(f"- {d.explanation}" for d in discrepancies)
+        dispute_note = (
+            f"Hi {vendor} Billing Team,\n\n"
+            f"We reviewed Invoice #{invoice_number} (dated {issue_date}) and noticed line-item math differences:\n"
+            f"{bullet_lines}\n\n"
+            f"Could you please send an updated itemized breakdown confirming the total of {currency} ${computed_total:,.2f}?\n\nThank you!"
+        )
     else:
         direction = "overcharged" if total_delta > Decimal("0.00") else "under-billed"
         plain_summary = (
