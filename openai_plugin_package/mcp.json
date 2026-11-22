@@ -3,7 +3,7 @@
   "mcpServers": {
     "billtally": {
       "type": "streamable-http",
-      "url": "https://schemaextract-mcp-production.up.railway.app/mcp"
+      "url": "https://billtally.app/mcp"
     }
   }
 }

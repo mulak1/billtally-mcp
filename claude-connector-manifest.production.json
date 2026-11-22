@@ -8,24 +8,24 @@
   "publisher": {
     "name": "BillTally",
     "founder": "Kader Mula",
-    "website": "https://schemaextract-mcp-production.up.railway.app",
-    "about_url": "https://schemaextract-mcp-production.up.railway.app/about",
-    "documentation_url": "https://schemaextract-mcp-production.up.railway.app/docs",
+    "website": "https://billtally.app",
+    "about_url": "https://billtally.app/about",
+    "documentation_url": "https://billtally.app/docs",
     "support_email": "mulak1@gmail.com",
-    "privacy_policy_url": "https://schemaextract-mcp-production.up.railway.app/privacy",
-    "terms_of_service_url": "https://schemaextract-mcp-production.up.railway.app/terms"
+    "privacy_policy_url": "https://billtally.app/privacy",
+    "terms_of_service_url": "https://billtally.app/terms"
   },
   "mcp_endpoint": {
     "transport": "streamable-http",
-    "url": "https://schemaextract-mcp-production.up.railway.app/mcp",
+    "url": "https://billtally.app/mcp",
     "protocol_version": "2025-03-26"
   },
   "authentication": {
     "type": "oauth2.1_pkce",
-    "metadata_url": "https://schemaextract-mcp-production.up.railway.app/.well-known/oauth-authorization-server",
-    "registration_url": "https://schemaextract-mcp-production.up.railway.app/oauth/register",
-    "authorization_url": "https://schemaextract-mcp-production.up.railway.app/oauth/authorize",
-    "token_url": "https://schemaextract-mcp-production.up.railway.app/oauth/token",
+    "metadata_url": "https://billtally.app/.well-known/oauth-authorization-server",
+    "registration_url": "https://billtally.app/oauth/register",
+    "authorization_url": "https://billtally.app/oauth/authorize",
+    "token_url": "https://billtally.app/oauth/token",
     "code_challenge_method": "S256",
     "scopes": ["mcp:tools", "mcp:export"]
   },

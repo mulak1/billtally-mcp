@@ -4,7 +4,7 @@
   "title": "BillTally — Bill & Invoice Math Checker",
   "description": "Penny-exact invoice math verification, bank statement matching, and Excel/CSV ledger export.",
   "version": "1.0.0",
-  "websiteUrl": "https://schemaextract-mcp-production.up.railway.app",
+  "websiteUrl": "https://billtally.app",
   "repository": {
     "url": "https://github.com/mulak1/billtally-mcp",
     "source": "github"
@@ -12,7 +12,7 @@
   "remotes": [
     {
       "type": "streamable-http",
-      "url": "https://schemaextract-mcp-production.up.railway.app/mcp"
+      "url": "https://billtally.app/mcp"
     }
   ]
 }

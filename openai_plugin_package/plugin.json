@@ -1,14 +1,14 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "billtally-invoice-extractor",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Check supplier bills and receipts to the penny, match invoices against bank statement withdrawals to spot duplicate charges, and export 3-tab Excel (.xlsx) workbooks with live =SUM() formulas.",
   "author": {
     "name": "Kader Mula",
     "email": "mulak1@gmail.com",
-    "url": "https://schemaextract-mcp-production.up.railway.app/about"
+    "url": "https://billtally.app/about"
   },
-  "homepage": "https://schemaextract-mcp-production.up.railway.app",
+  "homepage": "https://billtally.app",
   "repository": "https://github.com/mulak1/billtally-mcp",
   "license": "MIT",
   "keywords": [
@@ -33,10 +33,10 @@
           "Catch duplicate bank charges",
           "Export Excel (.xlsx) with =SUM() formulas"
         ],
-        "websiteURL": "https://schemaextract-mcp-production.up.railway.app",
-        "supportURL": "https://schemaextract-mcp-production.up.railway.app/docs",
-        "privacyPolicyURL": "https://schemaextract-mcp-production.up.railway.app/privacy",
-        "termsOfServiceURL": "https://schemaextract-mcp-production.up.railway.app/terms",
+        "websiteURL": "https://billtally.app",
+        "supportURL": "https://billtally.app/docs",
+        "privacyPolicyURL": "https://billtally.app/privacy",
+        "termsOfServiceURL": "https://billtally.app/terms",
         "defaultPrompt": [
           "Check a plumbing repair bill for line-item math overcharges",
           "Match October supplier bills against checking statement withdrawals",
@@ -99,7 +99,7 @@
             }
           ]
         },
-        "demo_recording_url": "https://schemaextract-mcp-production.up.railway.app/docs",
+        "demo_recording_url": "https://billtally.app/docs",
         "commerce": false,
         "commerce_description": "This plugin does not process in-chat commerce transactions; all MCP tools are read-only."
       },

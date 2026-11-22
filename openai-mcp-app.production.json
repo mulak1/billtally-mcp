@@ -5,8 +5,8 @@
   "short_description": "Check supplier bills for math errors, match invoices against bank statements, and export clean spreadsheets with live =SUM() formulas.",
   "categories": ["finance", "accounting", "productivity", "data_extraction"],
   "legal_info": {
-    "privacy_policy_url": "https://schemaextract-mcp-production.up.railway.app/privacy",
-    "terms_of_service_url": "https://schemaextract-mcp-production.up.railway.app/terms"
+    "privacy_policy_url": "https://billtally.app/privacy",
+    "terms_of_service_url": "https://billtally.app/terms"
   },
   "conversation_starters": [
     "Check this plumbing repair bill for any line-item math overcharges.",
@@ -14,17 +14,17 @@
     "Create an Excel spreadsheet (.xlsx) of our checked bills using corrected math totals."
   ],
   "mcp_endpoints": {
-    "streamable_http": "https://schemaextract-mcp-production.up.railway.app/mcp",
-    "healthcheck": "https://schemaextract-mcp-production.up.railway.app/health"
+    "streamable_http": "https://billtally.app/mcp",
+    "healthcheck": "https://billtally.app/health"
   },
   "oauth": {
     "version": "2.1",
     "pkce_required": true,
     "code_challenge_methods_supported": ["S256"],
-    "discovery_url": "https://schemaextract-mcp-production.up.railway.app/.well-known/oauth-authorization-server",
-    "registration_endpoint": "https://schemaextract-mcp-production.up.railway.app/oauth/register",
-    "authorization_endpoint": "https://schemaextract-mcp-production.up.railway.app/oauth/authorize",
-    "token_endpoint": "https://schemaextract-mcp-production.up.railway.app/oauth/token"
+    "discovery_url": "https://billtally.app/.well-known/oauth-authorization-server",
+    "registration_endpoint": "https://billtally.app/oauth/register",
+    "authorization_endpoint": "https://billtally.app/oauth/authorize",
+    "token_endpoint": "https://billtally.app/oauth/token"
   },
   "capabilities": {
     "tools": [

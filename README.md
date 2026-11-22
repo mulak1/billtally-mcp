@@ -2,12 +2,12 @@
 
 Plain-English supplier bill & receipt math verification, bank statement matching, and multi-tab Microsoft Excel (`.xlsx`) with live `=SUM()` formulas or accounting CSV export.
 
-- **Live Bill & Bank Check Desk:** https://schemaextract-mcp-production.up.railway.app
-- **Remote MCP Endpoint (Claude & ChatGPT):** `https://schemaextract-mcp-production.up.railway.app/mcp`
-- **User & IT Admin Documentation:** https://schemaextract-mcp-production.up.railway.app/docs
-- **About BillTally:** https://schemaextract-mcp-production.up.railway.app/about
-- **Privacy & Confidentiality Policy:** https://schemaextract-mcp-production.up.railway.app/privacy
-- **Terms of Service:** https://schemaextract-mcp-production.up.railway.app/terms
+- **Live Bill & Bank Check Desk:** https://billtally.app
+- **Remote MCP Endpoint (Claude & ChatGPT):** `https://billtally.app/mcp`
+- **User & IT Admin Documentation:** https://billtally.app/docs
+- **About BillTally:** https://billtally.app/about
+- **Privacy & Confidentiality Policy:** https://billtally.app/privacy
+- **Terms of Service:** https://billtally.app/terms
 - **Founder & Creator:** Kader Mula (`mulak1@gmail.com`)
 
 ---
@@ -31,7 +31,7 @@ Plain-English supplier bill & receipt math verification, bank statement matching
 
 1. Open **Claude Settings → Connectors → Add custom connector**.
 2. Name: `BillTally: Bill Math Checker & Bank Statement Matcher`
-3. Remote MCP Server URL: `https://schemaextract-mcp-production.up.railway.app/mcp`
+3. Remote MCP Server URL: `https://billtally.app/mcp`
 
 ## Local Development
 

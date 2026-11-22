@@ -10,8 +10,8 @@ startCommand:
         description: "Optional se_pro_... API key for 5,000 bills/month (15 bills/month free without a key)."
       endpointUrl:
         type: string
-        default: "https://schemaextract-mcp-production.up.railway.app/mcp"
+        default: "https://billtally.app/mcp"
         description: "Remote Streamable HTTP MCP endpoint URL."
     required: []
 exampleConfig:
-  endpointUrl: "https://schemaextract-mcp-production.up.railway.app/mcp"
+  endpointUrl: "https://billtally.app/mcp"

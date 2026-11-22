@@ -90,7 +90,7 @@ def render_docs_html() -> str:
     {TOP_NAV_HTML}
     <h1>User &amp; IT Administrator Documentation</h1>
     <p><strong>Connector Name:</strong> BillTally: Bill Math Checker &amp; Bank Statement Matcher<br/>
-    <strong>Remote MCP Endpoint:</strong> <code>https://schemaextract-mcp-production.up.railway.app/mcp</code><br/>
+    <strong>Remote MCP Endpoint:</strong> <code>https://billtally.app/mcp</code><br/>
     <strong>Support Contact:</strong> <a href="mailto:mulak1@gmail.com">mulak1@gmail.com</a></p>
 
     <h2>1. Overview for Bookkeepers, Accountants &amp; Small Business Teams</h2>
@@ -136,9 +136,9 @@ def render_docs_html() -> str:
 
     <h2>5. Policies, Repository &amp; Support</h2>
     <ul>
-      <li><strong>About BillTally:</strong> <a href="/about">https://schemaextract-mcp-production.up.railway.app/about</a></li>
-      <li><strong>Privacy &amp; Confidentiality Policy:</strong> <a href="/privacy">https://schemaextract-mcp-production.up.railway.app/privacy</a></li>
-      <li><strong>Terms of Service:</strong> <a href="/terms">https://schemaextract-mcp-production.up.railway.app/terms</a></li>
+      <li><strong>About BillTally:</strong> <a href="/about">https://billtally.app/about</a></li>
+      <li><strong>Privacy &amp; Confidentiality Policy:</strong> <a href="/privacy">https://billtally.app/privacy</a></li>
+      <li><strong>Terms of Service:</strong> <a href="/terms">https://billtally.app/terms</a></li>
       <li><strong>GitHub Repository:</strong> <a href="https://github.com/mulak1/billtally-mcp">https://github.com/mulak1/billtally-mcp</a></li>
       <li><strong>Support Email:</strong> <a href="mailto:mulak1@gmail.com">mulak1@gmail.com</a></li>
     </ul>
@@ -177,8 +177,8 @@ def render_about_html() -> str:
     <ul>
       <li><strong>Organization:</strong> BillTally</li>
       <li><strong>Founder &amp; Creator:</strong> Kader Mula</li>
-      <li><strong>Website:</strong> <a href="https://schemaextract-mcp-production.up.railway.app">https://schemaextract-mcp-production.up.railway.app</a></li>
-      <li><strong>Documentation:</strong> <a href="/docs">https://schemaextract-mcp-production.up.railway.app/docs</a></li>
+      <li><strong>Website:</strong> <a href="https://billtally.app">https://billtally.app</a></li>
+      <li><strong>Documentation:</strong> <a href="/docs">https://billtally.app/docs</a></li>
       <li><strong>GitHub:</strong> <a href="https://github.com/mulak1/billtally-mcp">https://github.com/mulak1/billtally-mcp</a></li>
       <li><strong>Contact &amp; Support:</strong> <a href="mailto:mulak1@gmail.com">mulak1@gmail.com</a></li>
     </ul>
