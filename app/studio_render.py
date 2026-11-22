@@ -156,4 +156,38 @@ STUDIO_RENDER_JS = """
           </tfoot>
         </table>`;
     }
+
+    function renderReconResult(recon, titlePrefix, isSample) {
+      const m = recon.summary_metrics;
+      const summaryPill = document.getElementById('bank-summary-pill');
+      if (summaryPill) {
+        summaryPill.className = (m.duplicate_count > 0 || m.unmatched_invoice_count > 0) ? 'pill pill-warn' : 'pill pill-ok';
+        summaryPill.textContent = (isSample ? 'Sample: ' : '') + m.matched_count + ' matched · ' + m.duplicate_count + ' duplicate caught';
+      }
+      const matchedRows = (recon.matched || []).map(r => `
+        <tr><td><span class="pill pill-ok">Matched payment</span></td><td>${escHtml(r.vendor)} (${escHtml(r.invoice_number)})</td><td>${escHtml(r.bank_date)}</td><td class="money">${escHtml(fmtMoney(r.bank_amount))}</td><td>Cleared in checking (no action needed)</td></tr>
+      `).join('');
+      const unpaidRows = (recon.unmatched_invoices || []).map(r => `
+        <tr><td><span class="pill pill-warn">Unpaid bill</span></td><td>${escHtml(r.vendor)} (${escHtml(r.invoice_number)})</td><td>${escHtml(r.date)}</td><td class="money">${escHtml(fmtMoney(r.total))}</td><td>Schedule payment or accrue at month-end</td></tr>
+      `).join('');
+      const alertRows = (recon.unmatched_bank_txns || []).map(r => {
+        const isDup = String(r.status || '').includes('DUPLICATE');
+        const actionText = isDup ? ('Request ' + fmtMoney(r.amount) + ' refund from supplier') : 'Ask cardholder for store receipt';
+        return `<tr style="background:#fff5f5;"><td><span class="pill pill-err">${isDup ? 'Duplicate charge caught' : 'Missing receipt'}</span></td><td>${escHtml(r.description)}</td><td>${escHtml(r.date)}</td><td class="money" style="color:var(--negative);">${escHtml(fmtMoney(r.amount))}</td><td>${escHtml(actionText)}</td></tr>`;
+      }).join('');
+      const badgeHtml = isSample
+        ? '<span class="pill pill-neutral">Sample demo data</span>'
+        : ((m.duplicate_count > 0 || m.unmatched_invoice_count > 0) ? '<span class="pill pill-err">Action needed</span>' : '<span class="pill pill-ok">All matched</span>');
+      const bannerCls = (m.duplicate_count > 0 || m.unmatched_invoice_count > 0) ? 'banner-warn' : 'banner-ok';
+      document.getElementById('bank-recon-container').innerHTML = `
+        <div class="banner ${bannerCls}" style="margin-top:8px;">
+          <span><strong>${escHtml(titlePrefix)}:</strong> ${Number(m.matched_count)} bill(s) matched · ${Number(m.unmatched_invoice_count)} unpaid · ${Number(m.duplicate_count)} duplicate withdrawal (${escHtml(fmtMoney(m.duplicate_exposure))})</span>
+          ${badgeHtml}
+        </div>
+        <table>
+          <thead><tr><th scope="col">Status</th><th scope="col">Supplier or bank description</th><th scope="col">Date</th><th scope="col" class="num">Amount</th><th scope="col">Recommended bookkeeper action</th></tr></thead>
+          <tbody>${matchedRows}${unpaidRows}${alertRows}</tbody>
+        </table>
+      `;
+    }
 """

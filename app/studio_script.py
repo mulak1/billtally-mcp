@@ -3,6 +3,7 @@ Client-side controller script for the SchemaExtract Accounting Workbench (`GET /
 Combines `STUDIO_RENDER_JS` with event/network/quota controllers (< 400 lines per module).
 """
 
+from app.studio_events import STUDIO_EVENTS_JS
 from app.studio_render import STUDIO_RENDER_JS
 
 STUDIO_CONTROLLER_JS = """
@@ -11,6 +12,7 @@ STUDIO_CONTROLLER_JS = """
     let BATCH_QUEUE = [];
     let LAST_RECON = null;
     let CURRENT_API_KEY = null;
+    let RECON_REQ_SEQ = 0;
 
     const SAMPLE_LABELS = {
       messy_saas_invoice: "Sample: Bakery supply bill (Balanced)",
@@ -109,6 +111,7 @@ STUDIO_CONTROLLER_JS = """
     }
 
     function wipeSessionNow() {
+      RECON_REQ_SEQ += 1;
       clearInput();
       LAST_RECON = null;
       const kpiDefaults = {
@@ -132,8 +135,10 @@ STUDIO_CONTROLLER_JS = """
       if (noteEl) noteEl.value = '';
       const mailEl = document.getElementById('mailto-link');
       if (mailEl) mailEl.href = 'mailto:';
+      const bankCsvEl = document.getElementById('bank-csv-input');
+      if (bankCsvEl) bankCsvEl.value = '';
       const reconBox = document.getElementById('bank-recon-container');
-      if (reconBox) reconBox.textContent = 'Click "Run October bank check" to compare 4 supplier bills against 5 business checking withdrawals.';
+      if (reconBox) reconBox.textContent = 'Upload or paste your bank statement CSV above to match against your checked bill(s), or click "Try October sample (demo data)".';
       const reconPill = document.getElementById('bank-summary-pill');
       if (reconPill) { reconPill.className = 'pill pill-neutral'; reconPill.textContent = 'Click to expand'; }
       const dlStatus = document.getElementById('download-status');
@@ -382,60 +387,83 @@ STUDIO_CONTROLLER_JS = """
       if (box && box.value) copyTextSafe(box.value, 'Copied polite supplier dispute email to your clipboard.');
     }
 
+    async function callReconcileMcp(reqId, argsObj) {
+      const rpcReq = {
+        jsonrpc: "2.0", id: reqId, method: "tools/call",
+        params: { name: "reconcile_invoices_with_bank_ledger", arguments: argsObj }
+      };
+      const res = await fetch('/mcp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(rpcReq),
+        signal: (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) ? AbortSignal.timeout(15000) : undefined
+      });
+      const rpcRes = await res.json().catch(() => ({}));
+      return { ok: res.ok, rpcRes };
+    }
+
+    async function runCustomBankReconciliation() {
+      const bankCsv = (document.getElementById('bank-csv-input') && document.getElementById('bank-csv-input').value || '').trim().slice(0, 250000);
+      if (!bankCsv) {
+        showToast('Upload or paste your bank statement CSV first — or click "Try October sample (demo data)".');
+        return;
+      }
+      if (!LAST_EXTRACTED) await runExtractMcp();
+      const docs = BATCH_QUEUE.length > 0 ? BATCH_QUEUE : (LAST_EXTRACTED ? [LAST_EXTRACTED] : []);
+      if (docs.length === 0) {
+        showToast('Check at least one supplier bill in Step 1 first.');
+        return;
+      }
+      const useCorr = document.getElementById('mode-corrected') ? document.getElementById('mode-corrected').checked : false;
+      const invoices = docs.map(d => ({
+        invoice_number: d.invoice_number || 'INV-UNKNOWN',
+        vendor: d.vendor || 'Unknown Supplier',
+        date: d.issue_date || '2026-10-01',
+        total: Number(useCorr ? (d.computed_total != null ? d.computed_total : d.total) : d.total) || 0,
+        currency: d.currency || 'USD'
+      }));
+      const mySeq = ++RECON_REQ_SEQ;
+      try {
+        const { ok, rpcRes } = await callReconcileMcp('studio-recon-custom', { invoices, bank_csv_text: bankCsv, date_tolerance_days: 7 });
+        if (mySeq !== RECON_REQ_SEQ) return;
+        if (!ok || rpcRes.error || !rpcRes.result || rpcRes.result.isError || !rpcRes.result.structuredContent) {
+          const rawMsg = (rpcRes.result && rpcRes.result.content && rpcRes.result.content[0] && rpcRes.result.content[0].text) || '';
+          const friendly = (!rawMsg || /validation error|Tool execution error:|bank_transactions/i.test(rawMsg))
+            ? 'Could not read any withdrawals from that bank CSV. Include Date, Description, and Amount columns.'
+            : rawMsg;
+          showToast(friendly);
+          return;
+        }
+        LAST_RECON = rpcRes.result.structuredContent;
+        renderReconResult(LAST_RECON, 'Your Bank Statement Summary', false);
+        showToast('Matched ' + docs.length + ' checked bill(s) against your bank statement CSV.');
+      } catch (err) {
+        if (mySeq === RECON_REQ_SEQ) showToast('Network error during bank statement check: ' + (err && err.message ? err.message : String(err)));
+      }
+    }
+
     async function runBankReconciliationPreset(scrollToCard) {
       setActivePresetUi('bank_reconciliation_batch');
       const detailsEl = document.getElementById('bank-match');
       if (detailsEl) detailsEl.open = true;
       const preset = PRESETS['bank_reconciliation_batch'];
       if (!preset) return;
-      const rpcReq = {
-        jsonrpc: "2.0", id: "studio-recon-1", method: "tools/call",
-        params: {
-          name: "reconcile_invoices_with_bank_ledger",
-          arguments: { invoices: preset.invoices, bank_transactions: preset.bank_transactions, date_tolerance_days: 7 }
-        }
-      };
+      const mySeq = ++RECON_REQ_SEQ;
       try {
-        const res = await fetch('/mcp', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(rpcReq) });
-        const rpcRes = await res.json();
-        if (!res.ok || !rpcRes.result || rpcRes.result.isError || !rpcRes.result.structuredContent) {
-          showToast('Unable to run bank statement reconciliation.');
+        const { ok, rpcRes } = await callReconcileMcp('studio-recon-1', {
+          invoices: preset.invoices, bank_transactions: preset.bank_transactions, date_tolerance_days: 7
+        });
+        if (mySeq !== RECON_REQ_SEQ) return;
+        if (!ok || rpcRes.error || !rpcRes.result || rpcRes.result.isError || !rpcRes.result.structuredContent) {
+          showToast('Unable to run October sample bank check.');
           return;
         }
         LAST_RECON = rpcRes.result.structuredContent;
-        const m = LAST_RECON.summary_metrics;
-
-        const summaryPill = document.getElementById('bank-summary-pill');
-        if (summaryPill) {
-          summaryPill.className = 'pill pill-warn';
-          summaryPill.textContent = m.matched_count + ' matched · ' + m.duplicate_count + ' duplicate caught';
-        }
-
-        const matchedRows = LAST_RECON.matched.map(r => `
-          <tr><td><span class="pill pill-ok">Matched payment</span></td><td>${escHtml(r.vendor)} (${escHtml(r.invoice_number)})</td><td>${escHtml(r.bank_date)}</td><td class="money">${escHtml(fmtMoney(r.bank_amount))}</td><td>Cleared in checking (no action needed)</td></tr>
-        `).join('');
-        const unpaidRows = LAST_RECON.unmatched_invoices.map(r => `
-          <tr><td><span class="pill pill-warn">Unpaid bill</span></td><td>${escHtml(r.vendor)} (${escHtml(r.invoice_number)})</td><td>${escHtml(r.date)}</td><td class="money">${escHtml(fmtMoney(r.total))}</td><td>Schedule payment or accrue at month-end</td></tr>
-        `).join('');
-        const alertRows = LAST_RECON.unmatched_bank_txns.map(r => {
-          const isDup = String(r.status || '').includes('DUPLICATE');
-          const actionText = isDup ? ('Request ' + fmtMoney(r.amount) + ' refund from supplier') : 'Ask cardholder for store receipt';
-          return `<tr style="background:#fff5f5;"><td><span class="pill pill-err">${isDup ? 'Duplicate charge caught' : 'Missing receipt'}</span></td><td>${escHtml(r.description)}</td><td>${escHtml(r.date)}</td><td class="money" style="color:var(--negative);">${escHtml(fmtMoney(r.amount))}</td><td>${escHtml(actionText)}</td></tr>`;
-        }).join('');
-
-        document.getElementById('bank-recon-container').innerHTML = `
-          <div class="banner banner-warn" style="margin-top:8px;">
-            <span><strong>October Checking Summary:</strong> ${Number(m.matched_count)} bills matched · ${Number(m.unmatched_invoice_count)} unpaid bill · ${Number(m.duplicate_count)} duplicate withdrawal (${escHtml(fmtMoney(m.duplicate_exposure))})</span>
-            <span class="pill pill-err">Action needed</span>
-          </div>
-          <table>
-            <thead><tr><th scope="col">Status</th><th scope="col">Supplier or bank description</th><th scope="col">Date</th><th scope="col" class="num">Amount</th><th scope="col">Recommended bookkeeper action</th></tr></thead>
-            <tbody>${matchedRows}${unpaidRows}${alertRows}</tbody>
-          </table>
-        `;
+        renderReconResult(LAST_RECON, 'October Sample Demo Summary', true);
+        showToast('Loaded October sample bank statement (demo data).');
         if (scrollToCard && detailsEl) detailsEl.scrollIntoView({ behavior: scrollBehaviorPref() });
       } catch (err) {
-        showToast('Network error during bank statement check: ' + (err && err.message ? err.message : String(err)));
+        if (mySeq === RECON_REQ_SEQ) showToast('Network error during bank statement check: ' + (err && err.message ? err.message : String(err)));
       }
     }
 
@@ -477,127 +505,6 @@ STUDIO_CONTROLLER_JS = """
         showToast('Export failed: ' + (err && err.message ? err.message : String(err)));
       }
     }
-
-    function bindStudioEvents() {
-      document.querySelectorAll('[data-preset]').forEach(el => {
-        el.addEventListener('click', (ev) => {
-          if (el.tagName === 'BUTTON') ev.preventDefault();
-          loadPreset(el.getAttribute('data-preset'));
-        });
-      });
-      document.querySelectorAll('[data-recon-scroll]').forEach(el => {
-        el.addEventListener('click', (ev) => {
-          if (el.tagName === 'BUTTON') ev.preventDefault();
-          runBankReconciliationPreset(el.getAttribute('data-recon-scroll') === 'true');
-        });
-      });
-      document.querySelectorAll('[data-export-format]').forEach(el => {
-        el.addEventListener('click', (ev) => {
-          if (el.tagName === 'BUTTON') ev.preventDefault();
-          exportBundle(el.getAttribute('data-export-format'));
-        });
-      });
-      const applyBtn = document.getElementById('apply-pro-key-btn');
-      if (applyBtn) applyBtn.addEventListener('click', applySavedProKey);
-      const copySumBtn = document.getElementById('copy-summary-btn');
-      if (copySumBtn) copySumBtn.addEventListener('click', copyVerifiedSummary);
-      const dismissBtn = document.getElementById('toast-dismiss-btn');
-      if (dismissBtn) dismissBtn.addEventListener('click', () => { document.getElementById('toast-bar').style.display = 'none'; });
-      const clearBtn = document.getElementById('clear-input-btn');
-      if (clearBtn) clearBtn.addEventListener('click', clearInput);
-      const wipeBtn = document.getElementById('wipe-session-btn');
-      if (wipeBtn) wipeBtn.addEventListener('click', wipeSessionNow);
-      const runBtn = document.getElementById('run-extract-btn');
-      if (runBtn) runBtn.addEventListener('click', runExtractMcp);
-      const batchBtn = document.getElementById('add-batch-btn');
-      if (batchBtn) batchBtn.addEventListener('click', addCurrentToBatch);
-      const disputeBtn = document.getElementById('copy-dispute-btn');
-      if (disputeBtn) disputeBtn.addEventListener('click', copySupplierNote);
-      const auditLinkBtn = document.getElementById('copy-audit-link-btn');
-      if (auditLinkBtn) auditLinkBtn.addEventListener('click', copyVerifiedAuditLink);
-      const catSel = document.getElementById('category-select');
-      if (catSel) catSel.addEventListener('change', () => safeSetStorage('bt_pref_category', catSel.value));
-      const reconBtn = document.getElementById('run-recon-btn');
-      if (reconBtn) reconBtn.addEventListener('click', () => runBankReconciliationPreset(false));
-      const modeCorr = document.getElementById('mode-corrected');
-      const modeBill = document.getElementById('mode-billed');
-      if (modeCorr) modeCorr.addEventListener('change', updateExportModeLabel);
-      if (modeBill) modeBill.addEventListener('change', updateExportModeLabel);
-
-      const rawInp = document.getElementById('raw-doc-input');
-      if (rawInp) {
-        rawInp.addEventListener('input', () => updateLineCount(true));
-        rawInp.addEventListener('keydown', (ev) => {
-          if (!ev.isComposing && (ev.metaKey || ev.ctrlKey) && ev.key === 'Enter') {
-            ev.preventDefault();
-            runExtractMcp();
-          }
-        });
-      }
-
-      const fileInp = document.getElementById('file-upload');
-      if (fileInp) {
-        fileInp.addEventListener('change', (ev) => {
-          const file = ev.target && ev.target.files && ev.target.files[0];
-          if (file) readAndCheckFile(file);
-          if (ev.target) ev.target.value = '';
-        });
-      }
-
-      const dz = document.getElementById('dropzone');
-      if (dz) {
-        dz.addEventListener('dragover', (ev) => { ev.preventDefault(); dz.classList.add('drag-over'); });
-        dz.addEventListener('dragleave', (ev) => { ev.preventDefault(); dz.classList.remove('drag-over'); });
-        dz.addEventListener('drop', (ev) => {
-          ev.preventDefault();
-          dz.classList.remove('drag-over');
-          const file = ev.dataTransfer && ev.dataTransfer.files && ev.dataTransfer.files[0];
-          if (file) readAndCheckFile(file);
-        });
-      }
-    }
-
-    async function initStudio() {
-      setGreetingByHour();
-      bindStudioEvents();
-      renderBatchCounter();
-      const savedKey = safeGetStorage('bt_pro_api_key');
-      if (savedKey) CURRENT_API_KEY = savedKey;
-      try {
-        const res = await fetch('/api/presets');
-        if (res.ok) {
-          const data = await res.json();
-          (data.presets || []).forEach(p => { PRESETS[p.id] = p; });
-        }
-      } catch (_e) { /* offline fallback */ }
-
-      const params = new URLSearchParams(window.location.search || '');
-      const sid = params.get('session_id') || params.get('checkout_session_id') || '';
-      if (sid.startsWith('cs_')) {
-        await activatePaidProSession(sid);
-      } else {
-        await refreshQuota();
-      }
-      const savedMode = safeGetStorage('bt_pref_export_mode');
-      if (savedMode === 'billed') {
-        const mb = document.getElementById('mode-billed');
-        if (mb) mb.checked = true;
-      }
-
-      const verticalKey = (params.get('vertical') || '').trim().toLowerCase();
-      const vCfg = VERTICAL_ROUTES[verticalKey];
-      if (vCfg) {
-        await loadPreset(vCfg.preset);
-        if (vCfg.openRecon) await runBankReconciliationPreset(true);
-      } else {
-        await loadPreset('messy_saas_invoice');
-      }
-      const savedCat = safeGetStorage('bt_pref_category');
-      const catEl = document.getElementById('category-select');
-      if (savedCat && catEl) catEl.value = savedCat;
-    }
-
-    initStudio();
 """
 
-STUDIO_CLIENT_JS = STUDIO_RENDER_JS + "\n" + STUDIO_CONTROLLER_JS
+STUDIO_CLIENT_JS = STUDIO_RENDER_JS + "\n" + STUDIO_CONTROLLER_JS + "\n" + STUDIO_EVENTS_JS

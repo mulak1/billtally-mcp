@@ -570,7 +570,9 @@ def test_web_studio_and_submission_manifests(client: TestClient):
     assert "extract_financial_documents" in html
     assert "reconcile_invoices_with_bank_ledger" in html
     assert "export_ledger_bundle" in html
-    assert "+ Optional Step 3: Compare against monthly bank statement" in html
+    assert "+ Optional Step 3: Match against your bank statement CSV (no bank login)" in html
+    assert 'id="bank-csv-input"' in html
+    assert 'id="run-custom-recon-btn"' in html
     assert "Jump to Disputed Line" in html
     assert "billed-strike" in html
     assert "active-sample-pill" in html

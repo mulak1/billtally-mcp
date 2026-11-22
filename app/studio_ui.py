@@ -374,16 +374,24 @@ def render_studio_html(csp_nonce: str = "") -> str:
 
           <details class="card collapsible-card" id="bank-match">
             <summary>
-              <span>+ Optional Step 3: Compare against monthly bank statement</span>
+              <span>+ Optional Step 3: Match against your bank statement CSV (no bank login)</span>
               <span class="pill pill-neutral" id="bank-summary-pill">Click to expand</span>
             </summary>
             <div style="margin-top:12px; padding-top:12px; border-top:1px solid var(--border);">
               <div style="display:flex; flex-wrap:wrap; gap:8px; justify-content:space-between; align-items:center; margin-bottom:8px;">
-                <div class="card-sub" style="margin-bottom:0;">Matches your supplier bills against checking withdrawals to catch unpaid bills and duplicate charges.</div>
-                <button type="button" class="btn btn-sm" id="run-recon-btn">Run October bank check</button>
+                <label for="bank-csv-input" class="card-sub" style="margin-bottom:0;">Export a monthly CSV from your bank and upload or paste it below to match against your checked bill(s). No bank login required.</label>
+                <label class="btn btn-sm file-upload-label" for="bank-csv-file" style="cursor:pointer;">
+                  Upload bank CSV (.csv / .txt)
+                  <input type="file" id="bank-csv-file" name="bank_csv_file" accept=".csv,.tsv,.txt" class="visually-hidden" />
+                </label>
+              </div>
+              <textarea id="bank-csv-input" name="bank_csv_input" maxlength="250000" spellcheck="false" style="min-height:92px; margin-bottom:10px;" placeholder="Date,Description,Amount&#10;2026-10-03,ACH PAYMENT HEARTLAND FLOUR PANTRY SUPPLY,6928.00"></textarea>
+              <div class="btn-row" style="margin-bottom:10px;">
+                <button type="button" class="btn btn-primary btn-sm" id="run-custom-recon-btn">Match My Bank Statement</button>
+                <button type="button" class="btn btn-sm" id="run-recon-btn">Try October sample (demo data)</button>
               </div>
               <div class="table-wrap" id="bank-recon-container" tabindex="0" role="region" aria-label="Bank statement reconciliation table" style="font-size:13px; color:var(--muted);">
-                Click "Run October bank check" to compare 4 supplier bills against 5 business checking withdrawals.
+                Upload or paste your bank statement CSV above to match against your checked bill(s), or click "Try October sample (demo data)".
               </div>
             </div>
           </details>

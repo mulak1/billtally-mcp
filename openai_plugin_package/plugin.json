@@ -104,7 +104,7 @@
         "commerce_description": "This plugin does not process in-chat commerce transactions; all MCP tools are read-only."
       },
       "publication": {
-        "release_notes": "Version 1.0.1 visual refresh: upgraded high-resolution light and dark brand icons and logos."
+        "release_notes": "Version 1.1.0: Migrated production endpoints to https://billtally.app, added 1-call audit_and_export_pack compound tool, raw bank CSV matching, Verified Dispute Links, and Excel Audit Cover Sheets."
       }
     }
   }
