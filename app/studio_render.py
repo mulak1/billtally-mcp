@@ -132,7 +132,7 @@ STUDIO_RENDER_JS = """
       document.getElementById('table-container').innerHTML = `
         <table>
           <thead>
-            <tr><th>#</th><th>Item description</th><th class="num">Qty</th><th class="num">Unit price</th><th class="num">Billed vs. True</th><th class="num">True math (Qty×Price)</th><th class="num">Check</th></tr>
+            <tr><th scope="col">#</th><th scope="col">Item description</th><th scope="col" class="num">Qty</th><th scope="col" class="num">Unit price</th><th scope="col" class="num">Billed vs. True</th><th scope="col" class="num">True math (Qty×Price)</th><th scope="col" class="num">Check</th></tr>
           </thead>
           <tbody>${rowsHtml}</tbody>
           <tfoot>

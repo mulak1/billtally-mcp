@@ -40,11 +40,11 @@ def render_studio_html(csp_nonce: str = "") -> str:
       --mono: "Geist Mono", ui-monospace, SFMono-Regular, monospace;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { background: var(--ground); color: var(--text); font-family: var(--sans); font-size: 14px; line-height: 1.5; font-variant-numeric: tabular-nums; overflow-x: hidden; }
+    body { background: var(--ground); color: var(--text); font-family: var(--sans); font-size: 14px; line-height: 1.5; font-variant-numeric: tabular-nums; overflow-x: clip; }
     .skip-link { position: absolute; left: 12px; top: -64px; background: var(--accent); color: #ffffff; padding: 10px 14px; border-radius: var(--radius-control); z-index: 100; text-decoration: none; font-weight: 500; }
     .skip-link:focus { top: 12px; }
     .visually-hidden { position: absolute; clip-path: inset(50%); overflow: hidden; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0; white-space: nowrap; }
-    a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus-visible, .file-upload-label:focus-within {
+    a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus-visible, .table-wrap:focus-visible, .file-upload-label:focus-within {
       outline: 2px solid #0b57d0; outline-offset: 2px;
     }
     .shell { display: grid; grid-template-columns: 252px minmax(0, 1fr); min-height: 100vh; }
@@ -82,13 +82,13 @@ def render_studio_html(csp_nonce: str = "") -> str:
     .btn-primary:hover { background: #2b2b2b; }
     .dropzone { border: 1.5px dashed var(--control); border-radius: var(--radius-control); padding: 14px 16px; margin-bottom: 10px; display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-between; align-items: center; font-size: 12.5px; color: var(--text); background: #fcfcfc; transition: border-color 160ms ease-out, background-color 160ms ease-out; }
     .dropzone.drag-over { border-color: var(--chart-3); background: #f0f6ff; }
-    progress.upload-progress { appearance: none; border: 0 solid; overflow: clip; width: 100%; height: 6px; border-radius: 999px; background: var(--raised); margin-bottom: 10px; container-type: inline-size; --progress-bar-indeterminate-size: 30%; --progress-bar-indeterminate-animation-duration: 1.4s; }
+    progress.upload-progress { appearance: none; border: 0 solid; overflow: clip; width: 100%; height: 6px; border-radius: 999px; background: var(--raised); margin-bottom: 10px; --progress-bar-animation: bt-progress-slide 1.4s infinite linear; }
     progress.upload-progress[hidden] { display: none; }
     progress.upload-progress::-webkit-progress-bar { background: transparent; }
-    progress.upload-progress::-webkit-progress-value { background: var(--positive); border-radius: 999px; animation: var(--progress-bar-animation, revert-rule); }
-    progress.upload-progress::-moz-progress-bar { background: var(--positive); border-radius: 999px; animation: var(--progress-bar-animation, revert-rule); }
-    progress.upload-progress:indeterminate { --progress-bar-animation: bt-progress-slide var(--progress-bar-indeterminate-animation-duration) infinite linear; }
-    @keyframes bt-progress-slide { from, to { inline-size: var(--progress-bar-indeterminate-size); margin-right: auto; } from { translate: -100%; } to { translate: 100cqi; } }
+    progress.upload-progress::-webkit-progress-value { background: var(--positive); border-radius: 999px; }
+    progress.upload-progress::-moz-progress-bar { background: var(--positive); border-radius: 999px; }
+    progress.upload-progress:indeterminate { background: linear-gradient(90deg, var(--raised) 0%, var(--positive) 50%, var(--raised) 100%); background-size: 200% 100%; animation: var(--progress-bar-animation); }
+    @keyframes bt-progress-slide { from { background-position: 200% 0; } to { background-position: -200% 0; } }
     .input-meta-bar { display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; align-items: center; margin-bottom: 6px; font-size: 12px; color: var(--muted); }
     textarea { width: 100%; min-height: 220px; border: 1px solid var(--control); border-radius: var(--radius-control); padding: 12px; font-family: var(--mono); font-size: 13px; color: var(--text); background: #fcfcfc; resize: vertical; margin-bottom: 12px; line-height: 1.55; }
     .banner { padding: 14px 16px; border-radius: var(--radius-control); font-size: 13.5px; margin-bottom: 14px; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
@@ -179,7 +179,13 @@ def render_studio_html(csp_nonce: str = "") -> str:
         <div class="nav-group-label">Sample bills to try</div>
         <a class="nav-item" id="side-messy_saas_invoice" href="#workbench" data-preset="messy_saas_invoice">Bakery supply bill (Balanced)</a>
         <a class="nav-item" id="side-discrepant_contractor_invoice" href="#workbench" data-preset="discrepant_contractor_invoice">Plumbing bill ($200 error)</a>
+        <a class="nav-item" id="side-cam_reconciliation_statement" href="#workbench" data-preset="cam_reconciliation_statement">CAM lease statement ($350 error)</a>
         <a class="nav-item" id="side-bank_reconciliation_batch" href="#bank-match" data-recon-scroll="true">October checking statement</a>
+        <div class="nav-group-label">Specialized checkers</div>
+        <a class="nav-item" href="/convert/bank-statement-to-qbo-csv">Bank Statement → QBO CSV</a>
+        <a class="nav-item" href="/check/supplier-invoice">Supplier Invoice Checker</a>
+        <a class="nav-item" href="/check/contractor-invoice">Contractor Invoice Audit</a>
+        <a class="nav-item" href="/check/cam-reconciliation">Commercial CAM Audit</a>
         <div class="nav-group-label">Company &amp; Policies</div>
         <a class="nav-item" href="/about">About BillTally</a>
         <a class="nav-item" href="/docs">Documentation</a>
@@ -232,11 +238,10 @@ def render_studio_html(csp_nonce: str = "") -> str:
       <div class="trust-strip" role="note" aria-label="Privacy and math guarantee">
         <span><strong>100% Penny-Exact Decimal Math:</strong> Fixed-decimal verification, never guessed.</span>
         <span>·</span>
-        <span><strong>PDF, Photo, Excel &amp; CSV Ready:</strong> Zero manual re-typing.</span>
-        <span>·</span>
-        <span><strong>Zero-Training Privacy &amp; 100% Refund Guarantee:</strong> Checked in memory only.</span>
+        <span id="privacy-mode-badge"><strong>Zero-Retention Privacy:</strong> Checked in ephemeral memory only.</span>
         <span>·</span>
         <span id="batch-counter-text"><strong>Batch Queue:</strong> 0 bills queued (exports active bill)</span>
+        <button type="button" class="btn btn-sm" id="wipe-session-btn" style="margin-left:auto;">Wipe Session Now</button>
       </div>
 
       <section class="steps-strip" aria-label="How this works in 3 plain steps">
@@ -294,7 +299,7 @@ def render_studio_html(csp_nonce: str = "") -> str:
       <section class="workbench" aria-label="Bill input and verification results">
         <div class="card" id="input-card">
           <div style="display:flex; flex-wrap:wrap; gap:8px; justify-content:space-between; align-items:center; margin-bottom:4px;">
-            <div class="card-title" style="margin-bottom:0;">Step 1 · Bill or statement text</div>
+            <h2 class="card-title" style="margin-bottom:0;">Step 1 · Bill or statement text</h2>
             <span class="pill pill-neutral" id="active-sample-pill">Sample: Bakery supply bill</span>
           </div>
           <div class="card-sub">Try a sample small-business bill with one click, drop a file, or paste your own text.</div>
@@ -331,7 +336,7 @@ def render_studio_html(csp_nonce: str = "") -> str:
 
         <div style="min-width:0;">
           <div class="card">
-            <div class="card-title">Step 2 · Bottom-line verdict &amp; line-item check</div>
+            <h2 class="card-title">Step 2 · Bottom-line verdict &amp; line-item check</h2>
             <div class="card-sub">Every row is checked by multiplying Quantity × Unit Price and comparing against the billed amount.</div>
 
             <div id="audit-banner" class="banner banner-ok" role="status" aria-live="polite">
@@ -359,11 +364,12 @@ def render_studio_html(csp_nonce: str = "") -> str:
               <textarea id="supplier-note-box" name="supplier_note" style="min-height:100px; background:#ffffff; margin-bottom:8px;"></textarea>
               <div class="btn-row" style="margin-bottom:0;">
                 <button type="button" class="btn btn-primary" id="copy-dispute-btn">Copy Supplier Dispute Email</button>
+                <button type="button" class="btn" id="copy-audit-link-btn">Copy Verified Dispute Link</button>
                 <a class="btn" id="mailto-link" href="mailto:billing@supplier.example">Open in email app</a>
               </div>
             </fieldset>
 
-            <div class="table-wrap" id="table-container"></div>
+            <div class="table-wrap" id="table-container" tabindex="0" role="region" aria-label="Line-item math verification table"></div>
           </div>
 
           <details class="card collapsible-card" id="bank-match">
@@ -376,7 +382,7 @@ def render_studio_html(csp_nonce: str = "") -> str:
                 <div class="card-sub" style="margin-bottom:0;">Matches your supplier bills against checking withdrawals to catch unpaid bills and duplicate charges.</div>
                 <button type="button" class="btn btn-sm" id="run-recon-btn">Run October bank check</button>
               </div>
-              <div class="table-wrap" id="bank-recon-container" style="font-size:13px; color:var(--muted);">
+              <div class="table-wrap" id="bank-recon-container" tabindex="0" role="region" aria-label="Bank statement reconciliation table" style="font-size:13px; color:var(--muted);">
                 Click "Run October bank check" to compare 4 supplier bills against 5 business checking withdrawals.
               </div>
             </div>

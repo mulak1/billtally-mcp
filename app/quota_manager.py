@@ -17,6 +17,7 @@ FREE_MONTHLY_LIMIT = 15
 FREE_EXPORT_LIMIT = 3
 PRO_MONTHLY_LIMIT = 5000
 MAX_FREE_DOCS_PER_IP_MONTHLY = 60
+MAX_FREE_EXPORTS_PER_IP_MONTHLY = 12
 PRO_PRICE_USD = 29
 PRO_STRIPE_PASS_USD = 49.99
 STRIPE_UPGRADE_URL = "https://buy.stripe.com/bJedR9cK12BN90903MfAc01"
@@ -42,6 +43,7 @@ class QuotaManager:
         self._pro_keys: "OrderedDict[str, str]" = OrderedDict()
         self._redeemed_sessions: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
         self._ip_free_counts: "OrderedDict[str, int]" = OrderedDict()
+        self._ip_free_export_counts: "OrderedDict[str, int]" = OrderedDict()
         self._free_export_counts: "OrderedDict[str, int]" = OrderedDict()
 
     def _sign_pro_key(self, raw_token: str) -> str:
@@ -223,15 +225,16 @@ class QuotaManager:
             bounded_put(self._ip_free_counts, ip_bucket, self._ip_free_counts.get(ip_bucket, 0) + 1, MAX_WORKSPACES)
         return copy.deepcopy(updated)
 
-    def consume_export(
+    def check_export_available(
         self,
         workspace_id: str = "default-workspace",
         api_key: Optional[str] = None,
         *,
         doc_count: int = 1,
         is_prod: bool = False,
+        caller_ip: str = "",
     ) -> Dict[str, Any]:
-        """Enforce the 3-export free preview cap (up to 3 bills per export) for non-Pro workspaces."""
+        """Validate free-tier export eligibility without mutating counters."""
         current = self.get_status(workspace_id, api_key=api_key, is_prod=is_prod)
         if current["tier"] == "pro":
             return {**current, "exports_used": 0, "exports_limit": PRO_MONTHLY_LIMIT}
@@ -242,9 +245,40 @@ class QuotaManager:
                 f"Free tier export limit reached ({used}/{FREE_EXPORT_LIMIT} spreadsheet exports; up to {FREE_EXPORT_LIMIT} bills per export). "
                 f"Unlock the ${PRO_STRIPE_PASS_USD:.2f} One-Time Pro Pass ({STRIPE_UPGRADE_URL}) for unlimited exports."
             )
-        new_used = used + 1
+        clean_ip = (caller_ip or "").strip()
+        if clean_ip not in LOCAL_IPS:
+            ip_bucket = f"{clean_ip}:{time.strftime('%Y-%m', time.gmtime())}"
+            ip_used = self._ip_free_export_counts.get(ip_bucket, 0)
+            if ip_used >= MAX_FREE_EXPORTS_PER_IP_MONTHLY:
+                raise PermissionError(
+                    f"Monthly free export ceiling reached for this network ({ip_used}/{MAX_FREE_EXPORTS_PER_IP_MONTHLY}). "
+                    f"Unlock the ${PRO_STRIPE_PASS_USD:.2f} One-Time Pro Pass ({STRIPE_UPGRADE_URL})."
+                )
+        return {**current, "exports_used": used, "exports_limit": FREE_EXPORT_LIMIT}
+
+    def consume_export(
+        self,
+        workspace_id: str = "default-workspace",
+        api_key: Optional[str] = None,
+        *,
+        doc_count: int = 1,
+        is_prod: bool = False,
+        caller_ip: str = "",
+    ) -> Dict[str, Any]:
+        """Enforce the 3-export free preview cap + per-IP ceiling for non-Pro workspaces."""
+        checked = self.check_export_available(
+            workspace_id, api_key=api_key, doc_count=doc_count, is_prod=is_prod, caller_ip=caller_ip
+        )
+        if checked["tier"] == "pro":
+            return checked
+        ws_id = checked["workspace_id"]
+        new_used = checked["exports_used"] + 1
         bounded_put(self._free_export_counts, ws_id, new_used, MAX_WORKSPACES)
-        return {**current, "exports_used": new_used, "exports_limit": FREE_EXPORT_LIMIT}
+        clean_ip = (caller_ip or "").strip()
+        if clean_ip not in LOCAL_IPS:
+            ip_bucket = f"{clean_ip}:{time.strftime('%Y-%m', time.gmtime())}"
+            bounded_put(self._ip_free_export_counts, ip_bucket, self._ip_free_export_counts.get(ip_bucket, 0) + 1, MAX_WORKSPACES)
+        return {**checked, "exports_used": new_used}
 
     def upgrade_to_pro(self, workspace_id: str = "default-workspace") -> Dict[str, Any]:
         return self._apply_pro_upgrade(workspace_id, self._sign_pro_key(secrets.token_hex(12)))

@@ -27,10 +27,13 @@ _CENT = Decimal("0.01")
 def _to_raw_dec(val: Any) -> Decimal:
     """Parse numeric value into an unquantized Decimal without sub-cent truncation or crash on malformed text."""
     if isinstance(val, Decimal):
-        return val
+        return val if val.is_finite() else Decimal("0")
+    if isinstance(val, bool):
+        return Decimal("0")
     if isinstance(val, (int, float)):
         try:
-            return Decimal(str(val))
+            d = Decimal(str(val))
+            return d if d.is_finite() else Decimal("0")
         except InvalidOperation:
             return Decimal("0")
     raw_str = str(val if val is not None else "0").strip()
@@ -46,13 +49,17 @@ def _to_raw_dec(val: Any) -> Decimal:
     if not cleaned or cleaned in ("-", ".", "-."):
         return Decimal("0")
     try:
-        return Decimal(cleaned)
+        d = Decimal(cleaned)
+        return d if d.is_finite() else Decimal("0")
     except InvalidOperation:
         return Decimal("0")
 
 
 def _to_dec(val: Any) -> Decimal:
-    return _to_raw_dec(val).quantize(_CENT, rounding=ROUND_HALF_UP)
+    try:
+        return _to_raw_dec(val).quantize(_CENT, rounding=ROUND_HALF_UP)
+    except InvalidOperation:
+        return Decimal("0.00")
 
 
 def _decode_if_structured(raw_text: str) -> Optional[Dict[str, Any]]:

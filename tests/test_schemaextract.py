@@ -348,6 +348,7 @@ def test_mcp_initialize_and_tools_list_annotations(client: TestClient):
         "extract_financial_documents",
         "reconcile_invoices_with_bank_ledger",
         "export_ledger_bundle",
+        "audit_and_export_pack",
     }
     for tool in tools:
         annotations = tool.get("annotations", {})
@@ -619,7 +620,7 @@ def test_web_studio_and_submission_manifests(client: TestClient):
     assert zip_res.status_code == 200 and len(zip_res.content) > 1000
 
     presets_res = client.get("/api/presets")
-    assert presets_res.status_code == 200 and len(presets_res.json()["presets"]) == 3
+    assert presets_res.status_code == 200 and len(presets_res.json()["presets"]) == 4
 
     claude_manifest_res = client.get("/manifests/claude")
     assert claude_manifest_res.status_code == 200 and claude_manifest_res.json()["name"] == "BillTally"

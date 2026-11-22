@@ -13,6 +13,7 @@ import io
 from pathlib import Path
 import re
 import secrets
+import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -24,36 +25,52 @@ from app.models import ExportBundleRequest, ExportBundleResult
 
 DEFAULT_EXPORT_DIR = Path(__file__).resolve().parent.parent / "exports"
 MAX_EPHEMERAL_EXPORTS = 256
+MAX_EPHEMERAL_EXPORT_BYTES = 32_000_000
+MAX_EXPORT_LINE_ITEMS = 5000
+MAX_EXPORT_RECON_ROWS = 5000
 EPHEMERAL_EXPORT_TTL_SEC = 900
+_EXPORT_LOCK = threading.Lock()
 _EPHEMERAL_EXPORTS: "OrderedDict[str, Tuple[bytes, int]]" = OrderedDict()
+_EPHEMERAL_EXPORT_BYTES = 0
 
 
-def _prune_ephemeral_exports() -> None:
+def _prune_ephemeral_exports_locked() -> None:
+    global _EPHEMERAL_EXPORT_BYTES
     now = int(time.time())
     expired = [k for k, (_, exp) in _EPHEMERAL_EXPORTS.items() if now > exp]
     for k in expired:
-        _EPHEMERAL_EXPORTS.pop(k, None)
+        removed = _EPHEMERAL_EXPORTS.pop(k, None)
+        if removed:
+            _EPHEMERAL_EXPORT_BYTES = max(0, _EPHEMERAL_EXPORT_BYTES - len(removed[0]))
 
 
 def put_ephemeral_export(filename: str, payload: bytes) -> None:
-    _prune_ephemeral_exports()
-    if filename in _EPHEMERAL_EXPORTS:
-        _EPHEMERAL_EXPORTS.move_to_end(filename)
-    _EPHEMERAL_EXPORTS[filename] = (payload, int(time.time()) + EPHEMERAL_EXPORT_TTL_SEC)
-    while len(_EPHEMERAL_EXPORTS) > MAX_EPHEMERAL_EXPORTS:
-        _EPHEMERAL_EXPORTS.popitem(last=False)
+    global _EPHEMERAL_EXPORT_BYTES
+    with _EXPORT_LOCK:
+        _prune_ephemeral_exports_locked()
+        if filename in _EPHEMERAL_EXPORTS:
+            old_bytes, _ = _EPHEMERAL_EXPORTS.pop(filename)
+            _EPHEMERAL_EXPORT_BYTES = max(0, _EPHEMERAL_EXPORT_BYTES - len(old_bytes))
+        _EPHEMERAL_EXPORTS[filename] = (payload, int(time.time()) + EPHEMERAL_EXPORT_TTL_SEC)
+        _EPHEMERAL_EXPORT_BYTES += len(payload)
+        while len(_EPHEMERAL_EXPORTS) > MAX_EPHEMERAL_EXPORTS or _EPHEMERAL_EXPORT_BYTES > MAX_EPHEMERAL_EXPORT_BYTES:
+            _, (ev_bytes, _) = _EPHEMERAL_EXPORTS.popitem(last=False)
+            _EPHEMERAL_EXPORT_BYTES = max(0, _EPHEMERAL_EXPORT_BYTES - len(ev_bytes))
 
 
 def get_ephemeral_export(filename: str) -> Optional[bytes]:
-    _prune_ephemeral_exports()
-    rec = _EPHEMERAL_EXPORTS.get(filename)
-    if not rec:
-        return None
-    payload, exp = rec
-    if int(time.time()) > exp:
-        _EPHEMERAL_EXPORTS.pop(filename, None)
-        return None
-    return payload
+    global _EPHEMERAL_EXPORT_BYTES
+    with _EXPORT_LOCK:
+        _prune_ephemeral_exports_locked()
+        rec = _EPHEMERAL_EXPORTS.get(filename)
+        if not rec:
+            return None
+        payload, exp = rec
+        if int(time.time()) > exp:
+            _EPHEMERAL_EXPORTS.pop(filename, None)
+            _EPHEMERAL_EXPORT_BYTES = max(0, _EPHEMERAL_EXPORT_BYTES - len(payload))
+            return None
+        return payload
 
 
 def sanitize_export_filename(raw_name: str) -> str:
@@ -67,7 +84,7 @@ def sanitize_export_filename(raw_name: str) -> str:
 def _safe_cell_text(val: Any) -> str:
     """Neutralize CSV/Excel formula injection (DDE) by prefixing leading formula characters on user strings."""
     s = str(val if val is not None else "")
-    return f"'{s}" if s.startswith(("=", "+", "-", "@", "\t", "\r")) else s
+    return f"'{s}" if s.lstrip(" ").startswith(("=", "+", "-", "@", "\t", "\r", "\n")) else s
 
 
 def _safe_int(val: Any, default: int = 1) -> int:
@@ -103,6 +120,8 @@ def _build_xlsx_bytes(
     documents: List[Dict[str, Any]],
     reconciliation: Optional[Dict[str, Any]],
     use_corrected_amounts: bool = False,
+    audit_url: str = "",
+    audit_sha256: str = "",
 ) -> Tuple[bytes, List[str], int]:
     """Create a styled multi-tab Excel workbook with native Excel `=SUM()` and `=ROUND()` formulas."""
     wb = openpyxl.Workbook()
@@ -152,6 +171,28 @@ def _build_xlsx_bytes(
         for col_idx, col_let in ((7, "G"), (8, "H"), (9, "I"), (10, "J"), (11, "K")):
             ws_summary.cell(row=sum_row, column=col_idx, value=f"=SUM({col_let}2:{col_let}{doc_rows+1})").font = total_font
 
+        # Big-4 style Audit Verification Seal block (placed below TOTAL ALL BILLS to preserve row 2..N+2 formula indices)
+        seal_row = sum_row + 2
+        seal_fill = PatternFill(start_color="F3F3F3", end_color="F3F3F3", fill_type="solid")
+        seal_title_font = Font(name="Calibri", size=10, bold=True, color="141414")
+        seal_meta_font = Font(name="Calibri", size=10, color="595959")
+        all_balanced = all(bool(d.get("math_verified", False)) for d in documents)
+        seal_rows = [
+            ("VERIFIED BY BILLTALLY", "Fixed-Decimal Arithmetic Audit Cover Sheet"),
+            ("Audit Verdict", "Balanced to the penny" if all_balanced else "Discrepancy flagged — review Audit_Memo"),
+            ("Verification URL", _safe_cell_text(audit_url or "https://billtally.app")),
+            ("Audit SHA-256", _safe_cell_text(audit_sha256 or "Computed on export")),
+        ]
+        for offset, (k_lbl, v_lbl) in enumerate(seal_rows):
+            r_idx = seal_row + offset
+            c1 = ws_summary.cell(row=r_idx, column=1, value=k_lbl)
+            c2 = ws_summary.cell(row=r_idx, column=2, value=v_lbl)
+            c1.font = seal_title_font
+            c2.font = seal_title_font if offset == 0 else seal_meta_font
+            if offset == 0:
+                c1.fill = seal_fill
+                c2.fill = seal_fill
+
     ws_items = wb.create_sheet(title="Normalized_Line_Items")
     item_headers = [
         "Bill / Invoice #", "Supplier", "Bill Date", "Expense Category", "Line #",
@@ -170,7 +211,7 @@ def _build_xlsx_bytes(
         vendor = _safe_cell_text(doc.get("vendor", "Unknown Supplier"))
         dt = _safe_cell_text(doc.get("issue_date", "2026-10-01"))
         cat = _safe_cell_text(doc.get("suggested_category", "General Operating Expense"))
-        for item in doc.get("line_items", []):
+        for item in (doc.get("line_items") or []):
             amt_raw = item.get("expected_amount", item.get("amount", 0)) if use_corrected_amounts else item.get("amount", 0)
             ws_items.append(
                 [
@@ -210,7 +251,7 @@ def _build_xlsx_bytes(
 
     r_idx = 2
     if reconciliation:
-        for m in reconciliation.get("matched", []):
+        for m in (reconciliation.get("matched") or []):
             ws_recon.append(
                 [
                     "Matched",
@@ -224,7 +265,7 @@ def _build_xlsx_bytes(
                 ]
             )
             r_idx += 1
-        for u_inv in reconciliation.get("unmatched_invoices", []):
+        for u_inv in (reconciliation.get("unmatched_invoices") or []):
             ws_recon.append(
                 [
                     "Unpaid Bill",
@@ -238,7 +279,7 @@ def _build_xlsx_bytes(
                 ]
             )
             r_idx += 1
-        for u_bnk in reconciliation.get("unmatched_bank_txns", []):
+        for u_bnk in (reconciliation.get("unmatched_bank_txns") or []):
             raw_status = str(u_bnk.get("status", ""))
             action_text = "Duplicate Withdrawal: Request Refund" if "DUPLICATE" in raw_status else "Missing Receipt: Attach Supplier Bill"
             ws_recon.append(
@@ -288,7 +329,7 @@ def _build_csv_bytes(
             category = _safe_cell_text(doc.get("suggested_category", "General Operating Expense"))
             verified = "TRUE" if doc.get("math_verified", False) else "FALSE"
             audit_memo = _safe_cell_text(_build_audit_memo(doc, use_corrected_amounts))
-            for item in doc.get("line_items", []):
+            for item in (doc.get("line_items") or []):
                 amt = _to_dec(item.get("expected_amount", item.get("amount", 0)) if use_corrected_amounts else item.get("amount", 0))
                 qty_dec = _to_raw_dec(item.get("quantity", 1))
                 unit_dec = _to_dec(item.get("unit_price", 0))
@@ -322,7 +363,7 @@ def _build_csv_bytes(
         )
         for doc in documents:
             audit_memo = _safe_cell_text(_build_audit_memo(doc, use_corrected_amounts))
-            for item in doc.get("line_items", []):
+            for item in (doc.get("line_items") or []):
                 qty_dec = _to_raw_dec(item.get("quantity", 1))
                 unit_dec = _to_dec(item.get("unit_price", 0))
                 rep_dec = _to_dec(item.get("amount", 0))
@@ -353,12 +394,32 @@ def _build_csv_bytes(
 def export_ledger_bundle(
     req: ExportBundleRequest,
     export_dir: Optional[Path] = None,
+    *,
+    audit_url: str = "",
+    audit_sha256: str = "",
 ) -> ExportBundleResult:
     """Generate a downloadable .xlsx or .csv ledger bundle held in short-TTL ephemeral memory."""
+    total_items = sum(
+        len(d["line_items"]) for d in req.documents if isinstance(d, dict) and isinstance(d.get("line_items"), list)
+    )
+    if total_items > MAX_EXPORT_LINE_ITEMS:
+        raise ValueError(f"Export exceeds maximum {MAX_EXPORT_LINE_ITEMS} total line items.")
+    if isinstance(req.reconciliation, dict):
+        recon_rows = sum(
+            len(req.reconciliation[k])
+            for k in ("matched", "unmatched_invoices", "unmatched_bank_txns")
+            if isinstance(req.reconciliation.get(k), list)
+        )
+        if recon_rows > MAX_EXPORT_RECON_ROWS:
+            raise ValueError(f"Export exceeds maximum {MAX_EXPORT_RECON_ROWS} reconciliation rows.")
     safe_base = sanitize_export_filename(req.bundle_name)
     if req.format == "xlsx":
         raw_bytes, sheets, row_count = _build_xlsx_bytes(
-            req.documents, req.reconciliation, use_corrected_amounts=req.use_corrected_amounts
+            req.documents,
+            req.reconciliation,
+            use_corrected_amounts=req.use_corrected_amounts,
+            audit_url=audit_url,
+            audit_sha256=audit_sha256,
         )
         ext = "xlsx"
         formulas = True
@@ -381,7 +442,7 @@ def export_ledger_bundle(
     if export_dir is not None:
         export_dir.mkdir(parents=True, exist_ok=True)
         file_path = (export_dir / filename).resolve()
-        if not str(file_path).startswith(str(export_dir.resolve())):
+        if not file_path.is_relative_to(export_dir.resolve()):
             raise ValueError("Resolved export path escapes allowed export directory.")
         file_path.write_bytes(raw_bytes)
 

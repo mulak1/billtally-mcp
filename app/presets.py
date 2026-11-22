@@ -149,11 +149,38 @@ _PRESETS: Dict[str, Dict[str, Any]] = {
             },
         ],
     },
+    "cam_reconciliation_statement": {
+        "id": "cam_reconciliation_statement",
+        "title": "Commercial Lease CAM Reconciliation (+$350.00 Pro-Rata Overcharge)",
+        "badge": "Math error caught · $350.00 overcharge",
+        "document_type": "invoice",
+        "category": "Utilities & Occupancy",
+        "description": "Annual commercial NNN / CAM reconciliation where Line 4 (12 months admin fee at $125/mo = $1,500.00) is billed as $1,850.00.",
+        "raw_text": (
+            "ANNUAL CAM & NNN OPERATING EXPENSE RECONCILIATION\n"
+            "Vendor: Maplewood Commercial Property Management LLC\n"
+            "Invoice Number: CAM-2026-UNIT-4B\n"
+            "Issue Date: 2026-10-15\n"
+            "Due Date: 2026-11-14\n"
+            "Currency: USD\n"
+            "------------------------------------------------------------------------\n"
+            "1. Pro-Rata Exterior Grounds & Snow Maintenance (12 Months) | Qty: 12 | Unit Price: $240.00 | Amount: $2,880.00\n"
+            "2. Building Hazard & Common Liability Insurance Share | Qty: 12 | Unit Price: $185.00 | Amount: $2,220.00\n"
+            "3. Common Area Lighting, Water & Refuse Allocation | Qty: 12 | Unit Price: $110.00 | Amount: $1,320.00\n"
+            "4. Property Management Administrative Fee (12 Months) | Qty: 12 | Unit Price: $125.00 | Amount: $1,850.00\n"
+            "5. Less: Estimated Monthly CAM Escrow Paid (12 Months) | Qty: 12 | Unit Price: -$500.00 | Amount: -$6,000.00\n"
+            "------------------------------------------------------------------------\n"
+            "Subtotal: $2,270.00\n"
+            "Tax: $0.00\n"
+            "Total Due: $2,270.00\n"
+        ),
+    },
 }
 
 _ALIASES = {
     "wholesale_bakery_invoice": "messy_saas_invoice",
     "plumbing_repair_invoice": "discrepant_contractor_invoice",
+    "cam_reconciliation": "cam_reconciliation_statement",
 }
 
 

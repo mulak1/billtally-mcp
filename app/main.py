@@ -14,6 +14,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTex
 import uvicorn
 
 from app.analytics import build_chatgpt_openapi, detect_source, get_analytics_snapshot, record_event, render_analytics_html
+from app.audit_links import check_audit_link_rate_limit, create_audit_link, get_audit_record, render_verified_audit_html
 from app.exporter import DEFAULT_EXPORT_DIR, export_ledger_bundle, get_ephemeral_export, sanitize_export_filename
 from app.extractor import extract_financial_document
 from app.mcp_server import MCP_PROTOCOL_VERSION, MCP_TOOLS_CATALOG, handle_mcp_jsonrpc
@@ -25,6 +26,7 @@ from app.reconciler import reconcile_invoices_with_bank_ledger
 from app.stripe_verify import verify_paid_stripe_checkout_session as _verify_paid_stripe_checkout_session, verify_stripe_webhook_signature as _verify_stripe_webhook_signature
 from app.studio_pages import BILLTALLY_FAVICON_SVG, render_about_html, render_docs_html, render_privacy_html, render_terms_html
 from app.studio_ui import render_studio_html
+from app.vertical_pages import render_robots_txt, render_sitemap_xml, render_vertical_page_html
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 MAX_BODY_BYTES = 5_000_000
@@ -66,7 +68,7 @@ async def security_headers_and_body_cap(request: Request, call_next: Callable) -
     resp.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains; preload"
     resp.headers["X-Content-Type-Options"] = "nosniff"
     resp.headers["X-Frame-Options"] = "DENY"
-    resp.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    resp.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
     resp.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=(), payment=()"
     resp.headers["Cross-Origin-Opener-Policy"] = "same-origin-allow-popups"
     resp.headers["Content-Security-Policy"] = (
@@ -191,23 +193,28 @@ async def mcp_jsonrpc_endpoint(request: Request) -> Response:
     ua = request.headers.get("user-agent", "")
     is_prod, caller_ip = _is_production_runtime(request), extract_caller_ip(request)
     caller_ws = resolve_request_workspace(request, oauth_server=oauth_server, quota_manager=quota_manager)
+    pub_origin = _resolve_public_origin(request)
     if isinstance(payload, list):
-        if len(payload) == 0:
-            return JSONResponse(status_code=400, content={"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "Invalid Request: empty JSON-RPC batch."}})
+        if len(payload) == 0 or len(payload) > 20:
+            return JSONResponse(status_code=400, content={"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "Invalid Request: JSON-RPC batch must contain 1 to 20 items."}})
         responses = [
             resp for item in payload
-            if (resp := handle_mcp_jsonrpc(item, quota_manager=quota_manager, default_workspace_id=caller_ws, is_prod=is_prod, caller_ip=caller_ip)[0]) is not None
+            if (resp := handle_mcp_jsonrpc(item, quota_manager=quota_manager, default_workspace_id=caller_ws, is_prod=is_prod, caller_ip=caller_ip, public_base_url=pub_origin)[0]) is not None
         ]
         return Response(status_code=202) if not responses else JSONResponse(status_code=200, content=responses)
     if isinstance(payload, dict):
-        method, params, req_id = payload.get("method", ""), payload.get("params") or {}, str(payload.get("id", ""))
-        client_name = (params.get("clientInfo") or {}).get("name", "") if isinstance(params, dict) else ""
+        method = payload.get("method", "")
+        raw_params = payload.get("params")
+        params = raw_params if isinstance(raw_params, dict) else {}
+        req_id = str(payload.get("id", ""))
+        client_info = params.get("clientInfo") if isinstance(params.get("clientInfo"), dict) else {}
+        client_name = str(client_info.get("name", ""))
         src = "Web Desk" if req_id.startswith("studio-") else detect_source(ua, path="/mcp", client_name=client_name)
         if method == "initialize":
             record_event(event_type="mcp_connect", source=src, detail=client_name or "MCP initialize")
         elif method == "tools/call":
             record_event(event_type="tool_call", source=src, tool_name=str(params.get("name", "-")), detail="MCP tools/call")
-    resp_dict, status_code = handle_mcp_jsonrpc(payload, quota_manager=quota_manager, default_workspace_id=caller_ws, is_prod=is_prod, caller_ip=caller_ip)
+    resp_dict, status_code = handle_mcp_jsonrpc(payload, quota_manager=quota_manager, default_workspace_id=caller_ws, is_prod=is_prod, caller_ip=caller_ip, public_base_url=pub_origin)
     return Response(status_code=202) if (status_code == 202 or resp_dict is None) else JSONResponse(status_code=status_code, content=resp_dict)
 
 
@@ -411,14 +418,99 @@ def api_export_bundle(req: ExportBundleRequest, request: Request) -> Dict[str, A
     api_key = req.api_key or request.query_params.get("api_key") or None
     ws_hint = request.query_params.get("workspace_id") or req.workspace_id
     ws = resolve_request_workspace(request, ws_hint, oauth_server=oauth_server, quota_manager=quota_manager, api_key=api_key)
+    caller_ip = extract_caller_ip(request)
     try:
-        quota_manager.consume_export(ws, api_key=api_key, doc_count=len(req.documents), is_prod=is_prod)
+        quota_manager.check_export_available(ws, api_key=api_key, doc_count=len(req.documents), is_prod=is_prod, caller_ip=caller_ip)
     except PermissionError as exc:
         raise HTTPException(status_code=402, detail=str(exc)) from exc
-    result = export_ledger_bundle(req)
+    pub_origin = _resolve_public_origin(request)
+    audit_meta: Dict[str, Any] = {}
+    if req.documents:
+        try:
+            audit_meta = create_audit_link(req.documents[0], reconciliation=req.reconciliation, public_base_url=pub_origin)
+        except ValueError:
+            audit_meta = {}
+    try:
+        result = export_ledger_bundle(
+            req,
+            audit_url=str(audit_meta.get("audit_url", "")),
+            audit_sha256=str(audit_meta.get("sha256", "")),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    quota_manager.consume_export(ws, api_key=api_key, doc_count=len(req.documents), is_prod=is_prod, caller_ip=caller_ip)
     src = detect_source(request.headers.get("user-agent", ""), path="/api/export")
     record_event(event_type="tool_call", source=src, tool_name="export_ledger_bundle", detail=req.format)
-    return result.model_dump()
+    payload_out = result.model_dump()
+    if audit_meta:
+        payload_out["audit_url"] = audit_meta["audit_url"]
+        payload_out["audit_id"] = audit_meta["audit_id"]
+    return payload_out
+
+
+@app.post("/api/audit-link")
+async def api_create_audit_link(request: Request) -> JSONResponse:
+    try:
+        check_audit_link_rate_limit(extract_caller_ip(request))
+    except PermissionError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload.")
+    if not isinstance(body, dict) or not isinstance(body.get("document"), dict):
+        raise HTTPException(status_code=400, detail="A checked 'document' object is required.")
+    recon = body.get("reconciliation") if isinstance(body.get("reconciliation"), dict) else None
+    try:
+        meta = create_audit_link(body["document"], reconciliation=recon, public_base_url=_resolve_public_origin(request))
+    except ValueError as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
+    return JSONResponse(status_code=200, content=meta)
+
+
+@app.get("/v/{audit_id}", response_class=HTMLResponse)
+def view_verified_audit_link(audit_id: str, request: Request) -> Response:
+    rec = get_audit_record(audit_id)
+    if rec is None:
+        raise HTTPException(status_code=404, detail="Verified audit link not found or expired.")
+    return HTMLResponse(
+        content=render_verified_audit_html(rec, public_base_url=_resolve_public_origin(request)),
+        headers={
+            "Cache-Control": "no-store, private, max-age=0",
+            "X-Robots-Tag": "noindex, nofollow, noarchive",
+            "Referrer-Policy": "no-referrer",
+        },
+    )
+
+
+@app.get("/convert/bank-statement-to-qbo-csv", response_class=HTMLResponse)
+def vertical_bank_to_qbo(request: Request) -> HTMLResponse:
+    return HTMLResponse(content=render_vertical_page_html("bank-statement-to-qbo-csv", public_base_url=_resolve_public_origin(request)))
+
+
+@app.get("/check/supplier-invoice", response_class=HTMLResponse)
+def vertical_supplier_invoice(request: Request) -> HTMLResponse:
+    return HTMLResponse(content=render_vertical_page_html("supplier-invoice", public_base_url=_resolve_public_origin(request)))
+
+
+@app.get("/check/contractor-invoice", response_class=HTMLResponse)
+def vertical_contractor_invoice(request: Request) -> HTMLResponse:
+    return HTMLResponse(content=render_vertical_page_html("contractor-invoice", public_base_url=_resolve_public_origin(request)))
+
+
+@app.get("/check/cam-reconciliation", response_class=HTMLResponse)
+def vertical_cam_reconciliation(request: Request) -> HTMLResponse:
+    return HTMLResponse(content=render_vertical_page_html("cam-reconciliation", public_base_url=_resolve_public_origin(request)))
+
+
+@app.get("/sitemap.xml")
+def sitemap_xml(request: Request) -> Response:
+    return Response(content=render_sitemap_xml(_resolve_public_origin(request)), media_type="application/xml")
+
+
+@app.get("/robots.txt", response_class=PlainTextResponse)
+def robots_txt(request: Request) -> PlainTextResponse:
+    return PlainTextResponse(content=render_robots_txt(_resolve_public_origin(request)))
 
 
 @app.get("/downloads/{filename}")
@@ -433,21 +525,23 @@ def download_exported_bundle(filename: str, request: Request) -> Response:
         if ext == ".xlsx"
         else "text/csv; charset=utf-8"
     )
+    dl_headers = {
+        "Content-Disposition": f'attachment; filename="{safe_name}"',
+        "Cache-Control": "no-store, private, max-age=0",
+        "X-Robots-Tag": "noindex, nofollow, noarchive",
+        "Referrer-Policy": "no-referrer",
+    }
     mem_bytes = get_ephemeral_export(safe_name)
     if mem_bytes is not None:
         src = detect_source(request.headers.get("user-agent", ""), path="/downloads")
         record_event(event_type="spreadsheet_download", source=src, tool_name="export_ledger_bundle", detail=ext.lstrip("."))
-        return Response(
-            content=mem_bytes,
-            media_type=media_type,
-            headers={"Content-Disposition": f'attachment; filename="{safe_name}"'},
-        )
+        return Response(content=mem_bytes, media_type=media_type, headers=dl_headers)
     resolved = (DEFAULT_EXPORT_DIR / safe_name).resolve()
-    if not str(resolved).startswith(str(DEFAULT_EXPORT_DIR.resolve())) or not resolved.is_file():
+    if not resolved.is_relative_to(DEFAULT_EXPORT_DIR.resolve()) or not resolved.is_file():
         raise HTTPException(status_code=404, detail="Export file not found or expired.")
     src = detect_source(request.headers.get("user-agent", ""), path="/downloads")
     record_event(event_type="spreadsheet_download", source=src, tool_name="export_ledger_bundle", detail=ext.lstrip("."))
-    return FileResponse(path=str(resolved), filename=resolved.name, media_type=media_type)
+    return FileResponse(path=str(resolved), filename=resolved.name, media_type=media_type, headers=dl_headers)
 
 
 def _resolve_public_origin(request: Request) -> str:

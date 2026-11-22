@@ -10,15 +10,22 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from app.audit_links import create_audit_link
 from app.exporter import export_ledger_bundle
 from app.extractor import extract_financial_document
+from app.mcp_compound import (
+    get_mcp_prompt_response,
+    list_mcp_resources,
+    parse_raw_bank_csv_text,
+    read_mcp_resource_response,
+    run_audit_and_export_pack,
+)
 from app.models import (
     ExportBundleRequest,
     ExtractDocumentRequest,
     ReconcileLedgerRequest,
 )
 from app.oauth_quota import QuotaManager
-from app.presets import get_all_presets
 from app.reconciler import reconcile_invoices_with_bank_ledger
 
 MCP_PROTOCOL_VERSION = "2025-03-26"
@@ -102,6 +109,10 @@ MCP_TOOLS_CATALOG: List[Dict[str, Any]] = [
                         "description": "Individual bank statement withdrawal entry with txn_id, date, description, and withdrawal amount.",
                     },
                 },
+                "bank_csv_text": {
+                    "type": "string",
+                    "description": "Optional raw CSV or line-delimited bank statement text (auto-parsed into bank_transactions when provided).",
+                },
                 "date_tolerance_days": {
                     "type": "integer",
                     "default": 7,
@@ -121,7 +132,7 @@ MCP_TOOLS_CATALOG: List[Dict[str, Any]] = [
                     "description": "Optional BillTally Pro API key.",
                 },
             },
-            "required": ["invoices", "bank_transactions"],
+            "required": ["invoices"],
         },
         "annotations": {
             "title": "Match Bills to Bank Statement",
@@ -184,9 +195,72 @@ MCP_TOOLS_CATALOG: List[Dict[str, Any]] = [
             "openWorldHint": False,
         },
     },
+    {
+        "name": "audit_and_export_pack",
+        "title": "Audit Bill, Match Bank CSV & Export Verified Pack (1-Call)",
+        "description": (
+            "All-in-one compound audit tool: penny-verifies a supplier bill, optionally matches it against pasted "
+            "bank statement CSV text or transactions, mints a 14-day shareable Verified Dispute Link (/v/<id>) with "
+            "SHA-256 checksum, and generates a downloadable 3-tab Excel (.xlsx) workbook with live =SUM() formulas "
+            "or QuickBooks CSV in a single round-trip."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "raw_text": {
+                    "type": "string",
+                    "description": "Raw supplier bill, receipt, or CAM reconciliation text to verify.",
+                },
+                "bank_csv_text": {
+                    "type": "string",
+                    "description": "Optional pasted bank statement CSV or line text to cross-match against the bill.",
+                },
+                "bank_transactions": {
+                    "type": "array",
+                    "description": "Optional structured bank withdrawal rows to cross-match against the bill.",
+                    "items": {"type": "object"},
+                },
+                "format": {
+                    "type": "string",
+                    "enum": ["xlsx", "csv", "quickbooks_csv"],
+                    "default": "xlsx",
+                    "description": "Spreadsheet output format (xlsx, csv, or quickbooks_csv).",
+                },
+                "use_corrected_amounts": {
+                    "type": "boolean",
+                    "description": "When true, exports verified true math totals instead of overcharged billed totals.",
+                },
+                "bundle_name": {
+                    "type": "string",
+                    "description": "Optional label for the exported spreadsheet filename.",
+                },
+                "workspace_id": {
+                    "type": "string",
+                    "description": "Optional workspace identifier for quota tracking.",
+                },
+                "api_key": {
+                    "type": "string",
+                    "description": "Optional BillTally Pro API key.",
+                },
+            },
+            "required": ["raw_text"],
+        },
+        "annotations": {
+            "title": "1-Call Bill Audit, Dispute Link & Excel Pack",
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        },
+    },
 ]
 
 MCP_PROMPTS_CATALOG: List[Dict[str, Any]] = [
+    {
+        "name": "run_demo_overcharge_audit",
+        "title": "Try 1-click demo: Catch a +$200 plumbing overcharge & export Excel",
+        "description": "Zero-input demo that audits a sample contractor bill, catches a +$200.00 error, mints a Verified Dispute Link, and builds a 3-tab Excel pack.",
+    },
     {
         "name": "check_supplier_bill",
         "title": "Check a supplier bill for math errors",
@@ -212,6 +286,7 @@ def handle_mcp_jsonrpc(
     default_workspace_id: str = "default-workspace",
     is_prod: bool = False,
     caller_ip: str = "",
+    public_base_url: str = "",
 ) -> Tuple[Optional[Dict[str, Any]], int]:
     """Process a single JSON-RPC 2.0 message and return `(response_dict, http_status)`."""
     if not isinstance(payload, dict) or payload.get("jsonrpc") != "2.0":
@@ -226,7 +301,26 @@ def handle_mcp_jsonrpc(
 
     method = payload.get("method", "")
     req_id = payload.get("id")
-    params = payload.get("params") or {}
+    if not isinstance(method, str) or not method:
+        return (
+            {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "error": {"code": -32600, "message": "Invalid Request: method must be a non-empty string."},
+            },
+            400,
+        )
+    raw_params = payload.get("params")
+    if raw_params is not None and not isinstance(raw_params, dict):
+        return (
+            {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "error": {"code": -32602, "message": "Invalid params: expected JSON object."},
+            },
+            200,
+        )
+    params = raw_params or {}
 
     if method.startswith("notifications/") or req_id is None:
         return (None, 202)
@@ -249,9 +343,9 @@ def handle_mcp_jsonrpc(
                         "version": "1.0.0",
                     },
                     "instructions": (
-                        "Hello! Welcome to BillTally. Use `extract_financial_documents` to check supplier bills "
-                        "to the penny, `reconcile_invoices_with_bank_ledger` to match bills against bank withdrawals, "
-                        "and `export_ledger_bundle` to generate Excel (.xlsx) or accounting CSV files."
+                        "Hello! Welcome to BillTally. Use `audit_and_export_pack` for a 1-call bill check, bank CSV match, "
+                        "Verified Dispute Link, and Excel (.xlsx) export — or use `extract_financial_documents`, "
+                        "`reconcile_invoices_with_bank_ledger`, and `export_ledger_bundle` individually."
                     ),
                 },
             },
@@ -265,29 +359,42 @@ def handle_mcp_jsonrpc(
         return ({"jsonrpc": "2.0", "id": req_id, "result": {"tools": MCP_TOOLS_CATALOG}}, 200)
 
     if method == "resources/list":
-        resources = [
-            {
-                "uri": f"schemaextract://presets/{p['id']}",
-                "name": p["title"],
-                "description": p["description"],
-                "mimeType": "text/plain",
-            }
-            for p in get_all_presets()
-        ]
-        return ({"jsonrpc": "2.0", "id": req_id, "result": {"resources": resources}}, 200)
+        return ({"jsonrpc": "2.0", "id": req_id, "result": {"resources": list_mcp_resources()}}, 200)
+
+    if method == "resources/read":
+        uri = str(params.get("uri", "")).strip() if isinstance(params, dict) else ""
+        try:
+            return ({"jsonrpc": "2.0", "id": req_id, "result": read_mcp_resource_response(uri)}, 200)
+        except KeyError as exc:
+            return ({"jsonrpc": "2.0", "id": req_id, "error": {"code": -32602, "message": str(exc)}}, 200)
 
     if method == "prompts/list":
         return ({"jsonrpc": "2.0", "id": req_id, "result": {"prompts": MCP_PROMPTS_CATALOG}}, 200)
 
+    if method == "prompts/get":
+        p_name = str(params.get("name", "")).strip() if isinstance(params, dict) else ""
+        p_args = params.get("arguments") if isinstance(params, dict) else None
+        try:
+            return ({"jsonrpc": "2.0", "id": req_id, "result": get_mcp_prompt_response(p_name, p_args)}, 200)
+        except KeyError as exc:
+            return ({"jsonrpc": "2.0", "id": req_id, "error": {"code": -32602, "message": str(exc)}}, 200)
+
     if method == "tools/call":
         tool_name = params.get("name")
         arguments = params.get("arguments") or {}
-        if tool_name == "extract_financial_documents" and isinstance(arguments, dict):
+        if tool_name in ("extract_financial_documents", "audit_and_export_pack", "export_ledger_bundle") and isinstance(arguments, dict):
             has_pro = quota_manager.is_valid_pro_key(arguments.get("api_key"), is_prod=is_prod)
             if (is_prod and not has_pro) or not arguments.get("workspace_id") or arguments.get("workspace_id") == "default-workspace":
                 arguments = {**arguments, "workspace_id": default_workspace_id}
         return _dispatch_tool_call(
-            req_id, tool_name, arguments, quota_manager, export_dir, is_prod=is_prod, caller_ip=caller_ip
+            req_id,
+            tool_name,
+            arguments,
+            quota_manager,
+            export_dir,
+            is_prod=is_prod,
+            caller_ip=caller_ip,
+            public_base_url=public_base_url,
         )
 
     return (
@@ -303,7 +410,7 @@ def handle_mcp_jsonrpc(
 def _coerce_tool_arguments(tool_name: Optional[str], arguments: Dict[str, Any]) -> Dict[str, Any]:
     """Normalize common LLM argument aliases so cold store-review tool calls never fail validation."""
     args = dict(arguments or {})
-    if tool_name == "extract_financial_documents":
+    if tool_name in ("extract_financial_documents", "audit_and_export_pack"):
         if not args.get("raw_text"):
             for alias in ("text", "invoice_text", "bill_text", "document_text", "content", "input"):
                 if args.get(alias):
@@ -320,6 +427,8 @@ def _coerce_tool_arguments(tool_name: Optional[str], arguments: Dict[str, Any]) 
                 if alias in args:
                     args["bank_transactions"] = args[alias]
                     break
+        if (not args.get("bank_transactions")) and args.get("bank_csv_text"):
+            args["bank_transactions"] = parse_raw_bank_csv_text(str(args["bank_csv_text"]))
     elif tool_name == "export_ledger_bundle":
         if "documents" not in args:
             for alias in ("bills", "invoices", "extracted_documents"):
@@ -342,10 +451,12 @@ def _dispatch_tool_call(
     *,
     is_prod: bool = False,
     caller_ip: str = "",
+    public_base_url: str = "",
 ) -> Tuple[Dict[str, Any], int]:
-    """Execute one of the 3 registered MCP tools and format the MCP `content` + `structuredContent` response."""
+    """Execute one of the registered MCP tools and format the MCP `content` + `structuredContent` response."""
     try:
         arguments = _coerce_tool_arguments(tool_name, arguments)
+        base_pub = (public_base_url or os.environ.get("PUBLIC_BASE_URL", "")).rstrip("/")
         if tool_name == "extract_financial_documents":
             req = ExtractDocumentRequest(**arguments)
             quota_manager.check_available(req.workspace_id, api_key=req.api_key, is_prod=is_prod, caller_ip=caller_ip)
@@ -355,9 +466,18 @@ def _dispatch_tool_call(
             )
             result_obj = parsed_obj.model_copy(update={"quota_state": quota_state})
             structured = result_obj.model_dump()
+            audit_meta = create_audit_link(structured, public_base_url=base_pub)
+            structured["verified_audit_link"] = audit_meta
+            structured["web_desk_url"] = f"{base_pub}/" if base_pub else "/"
+            if structured.get("vendor_dispute_note") and not structured.get("math_verified", True):
+                structured["vendor_dispute_note"] = (
+                    f"{structured['vendor_dispute_note']}\n\n"
+                    f"Independent line-by-line math breakdown: {audit_meta['audit_url']}"
+                )
             summary_line = (
                 f"Hello! Here is your bill check for {result_obj.vendor} (Invoice #{result_obj.invoice_number}): "
-                f"{result_obj.plain_english_summary}"
+                f"{result_obj.plain_english_summary} "
+                f"Verified Audit Link: {audit_meta['audit_url']}"
             )
         elif tool_name == "reconcile_invoices_with_bank_ledger":
             req_recon = ReconcileLedgerRequest(**arguments)
@@ -372,13 +492,27 @@ def _dispatch_tool_call(
             )
         elif tool_name == "export_ledger_bundle":
             req_exp = ExportBundleRequest(**arguments)
+            quota_manager.check_export_available(
+                req_exp.workspace_id, api_key=req_exp.api_key, doc_count=len(req_exp.documents), is_prod=is_prod, caller_ip=caller_ip
+            )
             exp_obj = export_ledger_bundle(req_exp, export_dir=export_dir)
+            quota_manager.consume_export(
+                req_exp.workspace_id, api_key=req_exp.api_key, doc_count=len(req_exp.documents), is_prod=is_prod, caller_ip=caller_ip
+            )
             structured = exp_obj.model_dump()
-            base_pub = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
             dl_link = f"{base_pub}{exp_obj.download_url}" if base_pub else exp_obj.download_url
             summary_line = (
                 f"Your {exp_obj.format.upper()} spreadsheet '{exp_obj.filename}' is ready to download "
                 f"({exp_obj.size_bytes} bytes) at {dl_link}"
+            )
+        elif tool_name == "audit_and_export_pack":
+            summary_line, structured = run_audit_and_export_pack(
+                arguments,
+                quota_manager=quota_manager,
+                export_dir=export_dir,
+                is_prod=is_prod,
+                caller_ip=caller_ip,
+                public_base_url=base_pub,
             )
         else:
             return (
@@ -387,7 +521,7 @@ def _dispatch_tool_call(
                     "id": req_id,
                     "error": {
                         "code": -32602,
-                        "message": f"Unknown MCP tool '{tool_name}'. Available tools: extract_financial_documents, reconcile_invoices_with_bank_ledger, export_ledger_bundle.",
+                        "message": f"Unknown MCP tool '{tool_name}'. Available tools: extract_financial_documents, reconcile_invoices_with_bank_ledger, export_ledger_bundle, audit_and_export_pack.",
                     },
                 },
                 200,

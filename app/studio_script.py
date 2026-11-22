@@ -15,7 +15,15 @@ STUDIO_CONTROLLER_JS = """
     const SAMPLE_LABELS = {
       messy_saas_invoice: "Sample: Bakery supply bill (Balanced)",
       discrepant_contractor_invoice: "Sample: Plumbing bill ($200 overcharge)",
+      cam_reconciliation_statement: "Sample: CAM lease statement ($350 overcharge)",
       bank_reconciliation_batch: "Sample: October bank statement"
+    };
+
+    const VERTICAL_ROUTES = {
+      "bank-statement-to-qbo-csv": { preset: "bank_reconciliation_batch", openRecon: true },
+      "supplier-invoice": { preset: "messy_saas_invoice", openRecon: false },
+      "contractor-invoice": { preset: "discrepant_contractor_invoice", openRecon: false },
+      "cam-reconciliation": { preset: "cam_reconciliation_statement", openRecon: false }
     };
 
     function safeGetStorage(key) {
@@ -80,7 +88,7 @@ STUDIO_CONTROLLER_JS = """
     }
 
     function setActivePresetUi(id) {
-      ['messy_saas_invoice', 'discrepant_contractor_invoice', 'bank_reconciliation_batch'].forEach(k => {
+      ['messy_saas_invoice', 'discrepant_contractor_invoice', 'cam_reconciliation_statement', 'bank_reconciliation_batch'].forEach(k => {
         const b = document.getElementById('btn-' + k);
         const s = document.getElementById('side-' + k);
         if (b) b.classList.toggle('active-preset', k === id);
@@ -88,6 +96,87 @@ STUDIO_CONTROLLER_JS = """
       });
       const pill = document.getElementById('active-sample-pill');
       if (pill && SAMPLE_LABELS[id]) pill.textContent = SAMPLE_LABELS[id];
+    }
+
+    function setPrivacyBadge(mode) {
+      const el = document.getElementById('privacy-mode-badge');
+      if (!el) return;
+      if (mode === 'ocr') {
+        el.innerHTML = '<strong>Zero-Retention OCR:</strong> File parsed in memory and purged immediately.';
+      } else {
+        el.innerHTML = '<strong>Zero-Retention Privacy:</strong> Text checked in ephemeral memory only.';
+      }
+    }
+
+    function wipeSessionNow() {
+      clearInput();
+      LAST_RECON = null;
+      const kpiDefaults = {
+        'kpi-billed': '$0.00',
+        'kpi-computed': '$0.00',
+        'kpi-delta': '$0.00',
+        'kpi-vendor': 'Session wiped — ready for next bill',
+        'kpi-invoice-no': 'No active bill',
+        'kpi-status-caption': 'Paste or drop a bill to check',
+        'label-corrected-amt': '$0.00',
+        'label-billed-amt': '$0.00',
+        'compliance-caption': 'Included in your Excel & CSV exports'
+      };
+      Object.entries(kpiDefaults).forEach(([id, val]) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = val;
+      });
+      const deltaEl = document.getElementById('kpi-delta');
+      if (deltaEl) deltaEl.style.color = 'var(--text)';
+      const noteEl = document.getElementById('supplier-note-box');
+      if (noteEl) noteEl.value = '';
+      const mailEl = document.getElementById('mailto-link');
+      if (mailEl) mailEl.href = 'mailto:';
+      const reconBox = document.getElementById('bank-recon-container');
+      if (reconBox) reconBox.textContent = 'Click "Run October bank check" to compare 4 supplier bills against 5 business checking withdrawals.';
+      const reconPill = document.getElementById('bank-summary-pill');
+      if (reconPill) { reconPill.className = 'pill pill-neutral'; reconPill.textContent = 'Click to expand'; }
+      const dlStatus = document.getElementById('download-status');
+      if (dlStatus) dlStatus.textContent = '';
+      try {
+        if (window.localStorage) {
+          ['bt_pref_category', 'bt_pref_export_mode'].forEach(k => window.localStorage.removeItem(k));
+        }
+      } catch (_e) { /* ignore storage errors */ }
+      setPrivacyBadge('local');
+      showToast('Session wiped: cleared bill text, KPIs, dispute draft, batch queue, bank match, and saved preferences.');
+    }
+
+    let AUDIT_LINK_IN_FLIGHT = false;
+    async function copyVerifiedAuditLink() {
+      const docRef = LAST_EXTRACTED;
+      if (!docRef) { showToast('Check a supplier bill first to create a Verified Dispute Link.'); return; }
+      if (AUDIT_LINK_IN_FLIGHT) return;
+      const hasRecon = Boolean(LAST_RECON);
+      const cached = docRef.verified_audit_link;
+      if (cached && cached.audit_url && Boolean(cached._has_recon) === hasRecon) {
+        copyTextSafe(cached.audit_url, 'Copied Verified Dispute Link: ' + cached.audit_url);
+        return;
+      }
+      AUDIT_LINK_IN_FLIGHT = true;
+      try {
+        const res = await fetch('/api/audit-link', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ document: docRef, reconciliation: LAST_RECON }),
+          signal: (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) ? AbortSignal.timeout(15000) : undefined
+        });
+        const meta = await res.json().catch(() => ({}));
+        if (LAST_EXTRACTED !== docRef) return;
+        if (!res.ok || !meta.audit_url) { showToast('Unable to create Verified Dispute Link.'); return; }
+        meta._has_recon = hasRecon;
+        docRef.verified_audit_link = meta;
+        copyTextSafe(meta.audit_url, 'Copied Verified Dispute Link: ' + meta.audit_url);
+      } catch (_e) {
+        if (LAST_EXTRACTED === docRef) showToast('Network error while creating Verified Dispute Link.');
+      } finally {
+        AUDIT_LINK_IN_FLIGHT = false;
+      }
     }
 
     async function refreshQuota() {
@@ -196,6 +285,7 @@ STUDIO_CONTROLLER_JS = """
         if (pill) pill.textContent = 'File: ' + file.name;
         updateLineCount(false);
         LAST_EXTRACTED = data;
+        setPrivacyBadge('ocr');
         renderExtractedTable(LAST_EXTRACTED);
         await refreshQuota();
         showToast('Extracted & checked ' + file.name + ' to the penny.');
@@ -259,6 +349,7 @@ STUDIO_CONTROLLER_JS = """
 
     function updateExportModeLabel() {
       const useCorr = document.getElementById('mode-corrected') && document.getElementById('mode-corrected').checked;
+      safeSetStorage('bt_pref_export_mode', useCorr ? 'corrected' : 'billed');
       showToast(useCorr ? 'Export mode set to: Verified true math total.' : 'Export mode set to: Hold billed total for supplier credit note.');
     }
 
@@ -338,7 +429,7 @@ STUDIO_CONTROLLER_JS = """
             <span class="pill pill-err">Action needed</span>
           </div>
           <table>
-            <thead><tr><th>Status</th><th>Supplier or bank description</th><th>Date</th><th class="num">Amount</th><th>Recommended bookkeeper action</th></tr></thead>
+            <thead><tr><th scope="col">Status</th><th scope="col">Supplier or bank description</th><th scope="col">Date</th><th scope="col" class="num">Amount</th><th scope="col">Recommended bookkeeper action</th></tr></thead>
             <tbody>${matchedRows}${unpaidRows}${alertRows}</tbody>
           </table>
         `;
@@ -414,12 +505,18 @@ STUDIO_CONTROLLER_JS = """
       if (dismissBtn) dismissBtn.addEventListener('click', () => { document.getElementById('toast-bar').style.display = 'none'; });
       const clearBtn = document.getElementById('clear-input-btn');
       if (clearBtn) clearBtn.addEventListener('click', clearInput);
+      const wipeBtn = document.getElementById('wipe-session-btn');
+      if (wipeBtn) wipeBtn.addEventListener('click', wipeSessionNow);
       const runBtn = document.getElementById('run-extract-btn');
       if (runBtn) runBtn.addEventListener('click', runExtractMcp);
       const batchBtn = document.getElementById('add-batch-btn');
       if (batchBtn) batchBtn.addEventListener('click', addCurrentToBatch);
       const disputeBtn = document.getElementById('copy-dispute-btn');
       if (disputeBtn) disputeBtn.addEventListener('click', copySupplierNote);
+      const auditLinkBtn = document.getElementById('copy-audit-link-btn');
+      if (auditLinkBtn) auditLinkBtn.addEventListener('click', copyVerifiedAuditLink);
+      const catSel = document.getElementById('category-select');
+      if (catSel) catSel.addEventListener('change', () => safeSetStorage('bt_pref_category', catSel.value));
       const reconBtn = document.getElementById('run-recon-btn');
       if (reconBtn) reconBtn.addEventListener('click', () => runBankReconciliationPreset(false));
       const modeCorr = document.getElementById('mode-corrected');
@@ -481,7 +578,23 @@ STUDIO_CONTROLLER_JS = """
       } else {
         await refreshQuota();
       }
-      await loadPreset('messy_saas_invoice');
+      const savedMode = safeGetStorage('bt_pref_export_mode');
+      if (savedMode === 'billed') {
+        const mb = document.getElementById('mode-billed');
+        if (mb) mb.checked = true;
+      }
+
+      const verticalKey = (params.get('vertical') || '').trim().toLowerCase();
+      const vCfg = VERTICAL_ROUTES[verticalKey];
+      if (vCfg) {
+        await loadPreset(vCfg.preset);
+        if (vCfg.openRecon) await runBankReconciliationPreset(true);
+      } else {
+        await loadPreset('messy_saas_invoice');
+      }
+      const savedCat = safeGetStorage('bt_pref_category');
+      const catEl = document.getElementById('category-select');
+      if (savedCat && catEl) catEl.value = savedCat;
     }
 
     initStudio();
