@@ -28,7 +28,9 @@ _AMOUNT_RE = re.compile(
 )
 _DATE_RE = re.compile(r"\b(\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{2,4}|\d{1,2}-\d{1,2}-\d{4})\b")
 _HEADER_DATE_KEYS = ("date", "posted", "trans date", "transaction date")
-_HEADER_DESC_KEYS = ("desc", "payee", "merchant", "vendor", "memo", "name", "details", "narrative")
+# Prioritize Description/Payee over "details" (Chase Business Checking puts DEBIT/CREDIT in "Details")
+_HEADER_DESC_PRIMARY_KEYS = ("desc", "payee", "merchant", "vendor", "memo", "name", "narrative")
+_HEADER_DESC_KEYS = _HEADER_DESC_PRIMARY_KEYS + ("details",)
 _HEADER_AMT_KEYS = ("amount", "amt", "total", "value")
 _HEADER_DEBIT_KEYS = ("debit", "withdrawal", "outflow", "charge", "payment")
 _HEADER_CREDIT_KEYS = ("credit", "deposit", "inflow")
@@ -102,8 +104,11 @@ def _parse_headered_bank_csv(parsed_rows: List[List[str]], hdr_idx: int) -> List
     hdr_lower = [c.strip().lower() for c in parsed_rows[hdr_idx]]
     date_idx = next((i for i, c in enumerate(hdr_lower) if any(k in c for k in _HEADER_DATE_KEYS)), 0)
     desc_idx = next(
-        (i for i, c in enumerate(hdr_lower) if i != date_idx and any(k in c for k in _HEADER_DESC_KEYS)),
-        1 if date_idx != 1 else 0,
+        (i for i, c in enumerate(hdr_lower) if i != date_idx and any(k in c for k in _HEADER_DESC_PRIMARY_KEYS)),
+        next(
+            (i for i, c in enumerate(hdr_lower) if i != date_idx and "details" in c),
+            1 if date_idx != 1 else 0,
+        ),
     )
     reserved = {date_idx, desc_idx}
     debit_idx = next(
