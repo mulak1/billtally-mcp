@@ -9,7 +9,7 @@ from typing import Any, Dict
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import HTMLResponse, PlainTextResponse
 
-from app.analytics import build_chatgpt_openapi, get_analytics_snapshot, render_analytics_html
+from app.analytics import build_chatgpt_openapi, detect_source, get_analytics_snapshot, record_event, render_analytics_html
 from app.studio_pages import render_about_html, render_docs_html, render_privacy_html, render_terms_html
 from app.vertical_pages import render_robots_txt, render_sitemap_xml, render_vertical_page_html
 
@@ -65,6 +65,10 @@ def terms_of_service(request: Request) -> HTMLResponse:
 
 
 def _render_vertical(slug: str, request: Request) -> HTMLResponse:
+    src = detect_source(request.headers.get("user-agent", ""), path=request.url.path)
+    has_ad_click = any(request.query_params.get(k) for k in ("gclid", "gbraid", "wbraid"))
+    detail = f"GET {request.url.path} (ad)" if has_ad_click else f"GET {request.url.path}"
+    record_event(event_type="page_view", source=src, detail=detail)
     return HTMLResponse(
         content=render_vertical_page_html(
             slug,

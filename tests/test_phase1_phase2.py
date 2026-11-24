@@ -432,13 +432,15 @@ def test_adversarial_security_math_cro_and_seo_hardening(client: TestClient):
     assert "03/15/2026,'=CMD|calc,-45.00" in qbo_dl.text
     assert "03/16/2026,STRIPE DEPOSIT,500.00" in qbo_dl.text
 
-    # 6. CRO & Google Ads: gtag.js + CSP allowlist + gclid preservation + Check2QBO below FAQ
+    # 6. CRO & Google Ads: gtag.js + CSP allowlist + gclid preservation + Check2QBO below FAQ + analytics page_view
     landing = client.get("/convert/bank-statement-to-qbo-csv?gclid=EAIaIQobTest123")
     assert landing.status_code == 200
     assert "AW-18526471751" in landing.text
     assert "mode=upload&amp;gclid=EAIaIQobTest123" in landing.text
     assert "https://www.googletagmanager.com" in landing.headers.get("content-security-policy", "")
     assert landing.text.index("Frequently Asked Questions") < landing.text.index("Try Check2QBO")
+    recent = client.get("/api/analytics").json()["recent_events"]
+    assert any(ev["event"] == "page_view" and ev["detail"] == "GET /convert/bank-statement-to-qbo-csv (ad)" for ev in recent)
 
     # 7. SEO, MCP Spec & Reliability: canonical/meta on /, JSON-RPC id:null -> 200, www 301 redirect, robots.txt
     home = client.get("/")
